@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -757,108 +758,172 @@ func fetchBrokerTrades(conn models.BrokerConnection, cfg brokerConfig, userID uu
 	return nil, fmt.Errorf("no trade fetcher for broker: %s", conn.BrokerName)
 }
 
-func fetchAngelOneTrades(conn models.BrokerConnection, cfg brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
-	req, _ := http.NewRequest("GET",
-		"https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/getTradeBook",
-		nil)
-	req.Header.Set("Authorization", "Bearer "+conn.AccessToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-UserType", "USER")
-	req.Header.Set("X-SourceID", "WEB")
-	req.Header.Set("X-ClientLocalIP", "127.0.0.1")
-	req.Header.Set("X-ClientPublicIP", "127.0.0.1")
-	req.Header.Set("X-MACAddress", "00:00:00:00:00:00")
-	req.Header.Set("X-PrivateKey", cfg.APIKey)
+// angelOneRow is the common shape returned by both getTradeBook and getOrderBook.
+type angelOneRow struct {
+	OrderID         string  `json:"orderid"`
+	UniqueOrderID   string  `json:"uniqueorderid"`
+	TradingSymbol   string  `json:"tradingsymbol"`
+	Exchange        string  `json:"exchange"`        // NSE / BSE / NFO / MCX
+	ProductType     string  `json:"producttype"`     // INTRADAY / DELIVERY / CARRYFORWARD
+	TransactionType string  `json:"transactiontype"` // BUY / SELL
+	OrderStatus     string  `json:"orderstatus"`     // complete / cancelled / open …
+	Quantity        int     `json:"quantity"`
+	FilledShares    string  `json:"filledshares"`    // in order book
+	FillQty         int     `json:"fillid"`          // in trade book
+	AveragePrice    float64 `json:"averageprice"`
+	Price           float64 `json:"price"`
+	TradeID         string  `json:"tradeID"`
+	UpdateTime      string  `json:"updatetime"` // "02-Jan-2006 15:04:05"
+	FillTime        string  `json:"filltime"`   // in trade book
+	OptionType      string  `json:"optiontype"` // CE / PE / ""
+	StrikePrice     float64 `json:"strikeprice"`
+	ExpiryDate      string  `json:"expirydate"` // "25Jan2024"
+}
 
+func angelOneHeaders(conn models.BrokerConnection, cfg brokerConfig) map[string]string {
+	return map[string]string{
+		"Authorization":   "Bearer " + conn.AccessToken,
+		"Content-Type":    "application/json",
+		"Accept":          "application/json",
+		"X-UserType":      "USER",
+		"X-SourceID":      "WEB",
+		"X-ClientLocalIP": "127.0.0.1",
+		"X-ClientPublicIP": "127.0.0.1",
+		"X-MACAddress":    "00:00:00:00:00:00",
+		"X-PrivateKey":    cfg.APIKey,
+	}
+}
+
+func angelOneGet(url string, headers map[string]string) ([]angelOneRow, error) {
+	req, _ := http.NewRequest("GET", url, nil)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("angelone: http error: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return nil, fmt.Errorf("angelone: token expired (HTTP 401) — please reconnect")
 	}
 
 	var result struct {
-		Status  bool   `json:"status"`
-		Message string `json:"message"`
-		Data    []struct {
-			OrderID          string  `json:"orderid"`
-			UniqueOrderID    string  `json:"uniqueorderid"`
-			TradingSymbol    string  `json:"tradingsymbol"`
-			SymbolToken      string  `json:"symboltoken"`
-			Exchange         string  `json:"exchange"`       // NSE / BSE / NFO / MCX
-			ProductType      string  `json:"producttype"`    // INTRADAY / DELIVERY / CARRYFORWARD / MARGIN
-			TransactionType  string  `json:"transactiontype"` // BUY / SELL
-			Quantity         int     `json:"quantity"`
-			FillQty          int     `json:"fillid"`
-			Price            float64 `json:"price"`
-			AveragePrice     float64 `json:"averageprice"`
-			TradeID          string  `json:"tradeID"`
-			OrderTimestamp   string  `json:"updatetime"` // "02-Jan-2006 15:04:05"
-			OptionType       string  `json:"optiontype"` // CE / PE / ""
-			StrikePrice      float64 `json:"strikeprice"`
-			ExpiryDate       string  `json:"expirydate"` // "25Jan2024"
-		} `json:"data"`
+		Status  bool          `json:"status"`
+		Message string        `json:"message"`
+		Data    []angelOneRow `json:"data"`
 	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("angelone: decode error: %w", err)
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("angelone: decode %s: %w", url, err)
 	}
 	if !result.Status {
-		return nil, fmt.Errorf("angelone: API error: %s", result.Message)
+		return nil, fmt.Errorf("angelone: API error from %s: %s", url, result.Message)
+	}
+	return result.Data, nil
+}
+
+func angelOneRowToTrade(r angelOneRow, connID uuid.UUID, userID uuid.UUID) models.Trade {
+	// Parse timestamp — trade book uses updatetime / filltime, order book uses updatetime
+	ts := r.FillTime
+	if ts == "" {
+		ts = r.UpdateTime
+	}
+	tradeTime, _ := time.Parse("02-Jan-2006 15:04:05", ts)
+	if tradeTime.IsZero() {
+		tradeTime = time.Now()
 	}
 
+	// Best available quantity: fillid > filledshares > quantity
+	qty := r.Quantity
+	if r.FillQty > 0 {
+		qty = r.FillQty
+	} else if fs, err := strconv.Atoi(r.FilledShares); err == nil && fs > 0 {
+		qty = fs
+	}
+
+	// Use best available price
+	price := r.AveragePrice
+	if price == 0 {
+		price = r.Price
+	}
+
+	// Build instrument name
+	instrument := r.TradingSymbol
+	if r.StrikePrice > 0 && r.OptionType != "" {
+		instrument = fmt.Sprintf("%s %s %.0f%s", r.TradingSymbol, r.ExpiryDate, r.StrikePrice, r.OptionType)
+	}
+
+	// Pick best dedup key: tradeID > uniqueOrderID > orderID
+	tradeID := r.TradeID
+	if tradeID == "" {
+		tradeID = r.UniqueOrderID
+	}
+	if tradeID == "" {
+		tradeID = r.OrderID
+	}
+
+	rawJSON, _ := json.Marshal(r)
+	return models.Trade{
+		ID:                 uuid.New(),
+		UserID:             userID,
+		BrokerConnectionID: &connID,
+		BrokerTradeID:      tradeID,
+		TradeDate:          tradeTime,
+		EntryTime:          tradeTime,
+		Instrument:         instrument,
+		InstrumentType:     classifyAngelOneInstrumentType(r.Exchange, r.OptionType),
+		Segment:            classifyAngelOneSegment(r.Exchange, r.ProductType),
+		Direction:          r.TransactionType,
+		EntryPrice:         price,
+		Quantity:           qty,
+		Source:             "angelone",
+		RawData:            datatypes.JSON(rawJSON),
+	}
+}
+
+func fetchAngelOneTrades(conn models.BrokerConnection, cfg brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
+	hdrs := angelOneHeaders(conn, cfg)
 	connID := conn.ID
-	trades := make([]models.Trade, 0, len(result.Data))
-	for _, t := range result.Data {
-		tradeTime, _ := time.Parse("02-Jan-2006 15:04:05", t.OrderTimestamp)
-		if tradeTime.IsZero() {
-			tradeTime = time.Now()
-		}
+	seen := make(map[string]bool)
+	var allTrades []models.Trade
 
-		segment := classifyAngelOneSegment(t.Exchange, t.ProductType)
-		instrumentType := classifyAngelOneInstrumentType(t.Exchange, t.OptionType)
-
-		instrument := t.TradingSymbol
-		if t.StrikePrice > 0 && t.OptionType != "" {
-			instrument = fmt.Sprintf("%s %s %.0f%s", t.TradingSymbol, t.ExpiryDate, t.StrikePrice, t.OptionType)
-		}
-
-		qty := t.Quantity
-		if t.FillQty > 0 {
-			qty = t.FillQty
-		}
-
-		tradeID := t.TradeID
-		if tradeID == "" {
-			tradeID = t.UniqueOrderID
-		}
-		if tradeID == "" {
-			tradeID = t.OrderID
-		}
-
-		rawJSON, _ := json.Marshal(t)
-		trades = append(trades, models.Trade{
-			ID:                 uuid.New(),
-			UserID:             userID,
-			BrokerConnectionID: &connID,
-			BrokerTradeID:      tradeID,
-			TradeDate:          tradeTime,
-			EntryTime:          tradeTime,
-			Instrument:         instrument,
-			InstrumentType:     instrumentType,
-			Segment:            segment,
-			Direction:          t.TransactionType,
-			EntryPrice:         t.AveragePrice,
-			Quantity:           qty,
-			Source:             "angelone",
-			RawData:            datatypes.JSON(rawJSON),
-		})
+	// ── 1. TradeBook — today's executed fills ──────────────
+	tradeRows, err := angelOneGet(
+		"https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/getTradeBook",
+		hdrs,
+	)
+	if err != nil {
+		return nil, err // hard fail — if even today's trades can't be fetched, token is bad
 	}
-	return trades, nil
+	for _, r := range tradeRows {
+		t := angelOneRowToTrade(r, connID, userID)
+		if !seen[t.BrokerTradeID] {
+			seen[t.BrokerTradeID] = true
+			allTrades = append(allTrades, t)
+		}
+	}
+
+	// ── 2. OrderBook — all completed orders (includes historical sessions) ──
+	// Filter to status=="complete" (fully filled); these persist across days on SmartAPI.
+	orderRows, _ := angelOneGet(
+		"https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/getOrderBook",
+		hdrs,
+	)
+	for _, r := range orderRows {
+		if !strings.EqualFold(r.OrderStatus, "complete") {
+			continue // skip open / cancelled / rejected
+		}
+		t := angelOneRowToTrade(r, connID, userID)
+		if t.BrokerTradeID == "" || seen[t.BrokerTradeID] {
+			continue
+		}
+		seen[t.BrokerTradeID] = true
+		allTrades = append(allTrades, t)
+	}
+
+	return allTrades, nil
 }
 
 func classifyAngelOneSegment(exchange, productType string) string {
