@@ -819,6 +819,13 @@ func angelOneGet(url string, headers map[string]string) ([]angelOneRow, error) {
 		return nil, fmt.Errorf("angelone: decode %s: %w", url, err)
 	}
 	if !result.Status {
+		// AngelOne returns status:false with "No Data" / "No Record" when the
+		// account has no trades — treat that as an empty result, not an error.
+		msg := strings.ToLower(result.Message)
+		if strings.Contains(msg, "no data") || strings.Contains(msg, "no record") ||
+			strings.Contains(msg, "no trade") || strings.Contains(msg, "not found") {
+			return nil, nil // empty, not an error
+		}
 		return nil, fmt.Errorf("angelone: API error from %s: %s", url, result.Message)
 	}
 	return result.Data, nil
