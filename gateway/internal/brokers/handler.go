@@ -469,8 +469,8 @@ func SyncBroker(c *gin.Context) {
 	// Fetch trades from broker API
 	trades, err := fetchBrokerTrades(conn, cfg, userID)
 	if err != nil {
-		// Fall back to mock on API error (dev mode when no real keys)
-		trades = generateMockTrades(conn, userID)
+		c.JSON(http.StatusBadGateway, gin.H{"error": true, "code": "BROKER_API_ERROR", "message": "Failed to fetch trades from " + conn.BrokerName + ": " + err.Error()})
+		return
 	}
 
 	// Deduplicate and store
@@ -1217,28 +1217,3 @@ func brokerDisplayName(broker string) string {
 	return broker + " — connected"
 }
 
-func generateMockTrades(conn models.BrokerConnection, userID uuid.UUID) []models.Trade {
-	now := time.Now()
-	var trades []models.Trade
-	connID := conn.ID
-	symbols := []string{"NIFTY25000CE", "BANKNIFTY54000PE", "RELIANCE", "INFY", "HDFCBANK"}
-	for i := 0; i < 5; i++ {
-		pnl := float64((i%3-1) * 500)
-		trades = append(trades, models.Trade{
-			ID:                 uuid.New(),
-			UserID:             userID,
-			BrokerConnectionID: &connID,
-			BrokerTradeID:      fmt.Sprintf("MOCK-%s-%d", conn.BrokerName, now.UnixNano()+int64(i)),
-			TradeDate:          now.AddDate(0, 0, -i),
-			EntryTime:          now.AddDate(0, 0, -i),
-			Instrument:         symbols[i%len(symbols)],
-			Segment:            "FNO",
-			Direction:          "BUY",
-			EntryPrice:         150,
-			Quantity:           50,
-			PnL:                &pnl,
-			Source:             "oauth",
-		})
-	}
-	return trades
-}

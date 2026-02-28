@@ -36,10 +36,9 @@ export default function HeatmapPage() {
       setDayCells(d.data.cells ?? [])
       setInstrCells(i.data.cells ?? [])
     }).catch(() => {
-      // Use mock data on error
-      setHourCells(mockHourCells())
-      setDayCells(mockDayCells())
-      setInstrCells(mockInstrCells())
+      setHourCells([])
+      setDayCells([])
+      setInstrCells([])
     }).finally(() => setLoading(false))
   }, [range])
 
@@ -236,36 +235,3 @@ function CellGrid({ cells, maxAbs }: { cells: Cell[], maxAbs: number }) {
   )
 }
 
-// ─── MOCK DATA ────────────────────────────────────────────
-
-function mockHourCells(): Cell[] {
-  return [
-    { label: '09:00', pnl: 8200, trades: 12, avgPnl: 683 },
-    { label: '10:00', pnl: 5400, trades: 18, avgPnl: 300 },
-    { label: '11:00', pnl: 1200, trades: 8, avgPnl: 150 },
-    { label: '12:00', pnl: -800, trades: 5, avgPnl: -160 },
-    { label: '13:00', pnl: -2400, trades: 9, avgPnl: -267 },
-    { label: '14:00', pnl: -3600, trades: 11, avgPnl: -327 },
-    { label: '15:00', pnl: 1100, trades: 6, avgPnl: 183 },
-  ]
-}
-
-function mockDayCells(): Cell[] {
-  return [
-    { label: 'Mon', pnl: 4200, trades: 15, avgPnl: 280 },
-    { label: 'Tue', pnl: 6800, trades: 12, avgPnl: 567 },
-    { label: 'Wed', pnl: -1400, trades: 10, avgPnl: -140 },
-    { label: 'Thu', pnl: 2100, trades: 14, avgPnl: 150 },
-    { label: 'Fri', pnl: -3200, trades: 18, avgPnl: -178 },
-  ]
-}
-
-function mockInstrCells(): Cell[] {
-  return [
-    { label: 'NIFTY', pnl: 12400, trades: 22, avgPnl: 564 },
-    { label: 'BANKNIFTY', pnl: -4200, trades: 18, avgPnl: -233 },
-    { label: 'RELIANCE', pnl: 3800, trades: 8, avgPnl: 475 },
-    { label: 'INFY', pnl: 1200, trades: 6, avgPnl: 200 },
-    { label: 'HDFCBANK', pnl: -800, trades: 5, avgPnl: -160 },
-  ]
-}

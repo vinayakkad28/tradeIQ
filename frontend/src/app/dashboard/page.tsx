@@ -40,7 +40,7 @@ export default function DashboardOverview() {
                 </span>
               </div>
               <p style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: '1.25rem', maxWidth: 520 }}>
-                You&apos;re seeing demo analytics. Connect your broker or upload a trade CSV to unlock real insights — win rate, P&amp;L breakdown, behavioral patterns, and your personalised TradeIQ Score.
+                No trade data yet. Connect your broker or upload a trade CSV to start tracking real insights — win rate, P&amp;L breakdown, behavioral patterns, and your personalised TradeIQ Score.
               </p>
               <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                 <Link href="/dashboard/brokers" className="btn-primary" style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -67,7 +67,7 @@ export default function DashboardOverview() {
             </div>
           </div>
           <div style={{ marginTop: '1rem', fontFamily: 'var(--font-mono)', fontSize: '0.68rem', color: 'var(--color-text-muted)', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.75rem' }}>
-            DEMO MODE — analytics below are simulated · Connect a broker to see your actual performance
+            All metrics will show zeros until trades are imported · Connect a broker or upload a CSV to get started
           </div>
         </div>
       )}

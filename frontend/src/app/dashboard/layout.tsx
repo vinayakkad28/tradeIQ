@@ -76,7 +76,7 @@ function DashboardHeader() {
         </span>
         {!hasRealData && (
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.6rem', color: 'var(--color-amber-dim)', background: 'rgba(245,158,11,0.08)', padding: '0.15rem 0.4rem', borderRadius: 3, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-            Demo Mode
+            No Data
           </span>
         )}
         <div style={{ display: 'flex', gap: '0.25rem' }}>

@@ -4,8 +4,7 @@ import {
   useCallback, ReactNode,
 } from 'react'
 import { analyticsAPI } from '@/lib/api'
-import { MOCK_TRADES } from '@/lib/mockData'
-import { computeInsights, InsightReport } from '@/lib/insights'
+import { InsightReport } from '@/lib/insights'
 import { useAuth } from '@/context/AuthContext'
 
 export type DateRange = '7d' | '1m' | '3m' | '6m' | 'all'
@@ -117,12 +116,12 @@ function normalizeInsights(data: any): InsightReport {
   }
 }
 
-const MOCK_INSIGHTS = computeInsights(MOCK_TRADES)
+const EMPTY_INSIGHTS: InsightReport = normalizeInsights({})
 
 export function DateRangeProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading: authLoading } = useAuth()
   const [range, setRange] = useState<DateRange>('1m')
-  const [insights, setInsights] = useState<InsightReport>(MOCK_INSIGHTS)
+  const [insights, setInsights] = useState<InsightReport>(EMPTY_INSIGHTS)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hasRealData, setHasRealData] = useState(false)
@@ -135,16 +134,16 @@ export function DateRangeProvider({ children }: { children: ReactNode }) {
       const res = await analyticsAPI.insights(RANGE_MAP[r])
       const data = res.data?.data ?? res.data
       if (data?.hasData === false || data?.totalTrades === 0) {
-        // No trades yet — keep showing mock data with a flag
+        // No trades yet — show empty state
         setHasRealData(false)
-        setInsights(MOCK_INSIGHTS)
+        setInsights(EMPTY_INSIGHTS)
       } else {
         setInsights(normalizeInsights(data))
         setHasRealData(true)
       }
     } catch (err) {
-      setError('Failed to load analytics. Showing demo data.')
-      setInsights(MOCK_INSIGHTS)
+      setError('Failed to load analytics. Please try again.')
+      setInsights(EMPTY_INSIGHTS)
       setHasRealData(false)
       console.error('Analytics fetch error:', err)
     } finally {
@@ -157,8 +156,8 @@ export function DateRangeProvider({ children }: { children: ReactNode }) {
     if (isAuthenticated) {
       fetchInsights(range)
     } else {
-      // Not logged in → always show mock data
-      setInsights(MOCK_INSIGHTS)
+      // Not logged in → show empty state
+      setInsights(EMPTY_INSIGHTS)
       setHasRealData(false)
     }
   }, [isAuthenticated, authLoading, range, fetchInsights])
