@@ -1,7 +1,15 @@
 package brokers
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"tradeiq/gateway/models"
@@ -11,6 +19,8 @@ import (
 	"github.com/google/uuid"
 )
 
+// ─── SUPPORTED BROKERS ────────────────────────────────────
+
 var supportedBrokers = []gin.H{
 	{"id": "zerodha", "name": "Zerodha", "description": "Kite API — OAuth 2.0"},
 	{"id": "upstox", "name": "Upstox", "description": "Upstox Pro API v2"},
@@ -19,16 +29,79 @@ var supportedBrokers = []gin.H{
 	{"id": "dhan", "name": "Dhan", "description": "Dhan HQ Trading API"},
 }
 
-// GET /users/me/brokers
+// Broker OAuth config from env
+type brokerConfig struct {
+	APIKey      string
+	APISecret   string
+	OAuthURL    string
+	TokenURL    string
+	RedirectURI string
+}
+
+func getBrokerConfig(broker string) brokerConfig {
+	appBase := os.Getenv("APP_BASE_URL")
+	if appBase == "" {
+		appBase = "http://localhost:8080"
+	}
+	redirect := appBase + "/api/v1/brokers/oauth/callback"
+
+	switch broker {
+	case "zerodha":
+		return brokerConfig{
+			APIKey:      os.Getenv("ZERODHA_API_KEY"),
+			APISecret:   os.Getenv("ZERODHA_API_SECRET"),
+			OAuthURL:    "https://kite.zerodha.com/connect/login",
+			TokenURL:    "https://api.kite.trade/session/token",
+			RedirectURI: redirect,
+		}
+	case "upstox":
+		return brokerConfig{
+			APIKey:      os.Getenv("UPSTOX_CLIENT_ID"),
+			APISecret:   os.Getenv("UPSTOX_CLIENT_SECRET"),
+			OAuthURL:    "https://api.upstox.com/v2/login/authorization/dialog",
+			TokenURL:    "https://api.upstox.com/v2/login/authorization/token",
+			RedirectURI: redirect,
+		}
+	case "angelone":
+		return brokerConfig{
+			APIKey:    os.Getenv("ANGELONE_CLIENT_ID"),
+			APISecret: os.Getenv("ANGELONE_CLIENT_SECRET"),
+			OAuthURL:  "", // SmartAPI uses client_id+TOTP, no web OAuth
+			TokenURL:  "https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword",
+		}
+	case "fyers":
+		return brokerConfig{
+			APIKey:      os.Getenv("FYERS_APP_ID"),
+			APISecret:   os.Getenv("FYERS_SECRET_KEY"),
+			OAuthURL:    "https://api-t1.fyers.in/api/v3/generate-authcode",
+			TokenURL:    "https://api-t1.fyers.in/api/v3/validate-authcode",
+			RedirectURI: redirect,
+		}
+	case "dhan":
+		return brokerConfig{
+			APIKey:   os.Getenv("DHAN_CLIENT_ID"),
+			APISecret: os.Getenv("DHAN_ACCESS_TOKEN"), // Dhan uses fixed access tokens
+		}
+	}
+	return brokerConfig{}
+}
+
+// ── GET /users/me/brokers ─────────────────────────────────
+
 func ListBrokers(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
 	var connections []models.BrokerConnection
 	database.DB.Where("user_id = ?", userID).Find(&connections)
-	c.JSON(http.StatusOK, gin.H{"connections": connections, "supported_brokers": supportedBrokers})
+	if connections == nil {
+		connections = []models.BrokerConnection{}
+	}
+	c.JSON(http.StatusOK, gin.H{"brokers": connections, "supported_brokers": supportedBrokers})
 }
 
-// POST /users/me/brokers/connect
+// ── POST /users/me/brokers/connect ────────────────────────
+
 func ConnectBroker(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
 	var req struct {
 		BrokerName string `json:"broker_name" binding:"required"`
 	}
@@ -36,12 +109,107 @@ func ConnectBroker(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "VALIDATION_ERROR", "message": err.Error()})
 		return
 	}
-	// In production: generate OAuth URL and state, store in Redis
-	oauthURL := "https://" + req.BrokerName + ".example.com/oauth?client_id=DEMO&redirect_uri=http://localhost:8080/callback"
-	c.JSON(http.StatusOK, gin.H{"oauth_url": oauthURL, "state": uuid.New().String()})
+
+	cfg := getBrokerConfig(req.BrokerName)
+
+	// If no API key configured, return info message
+	if cfg.APIKey == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"oauth_url": "",
+			"state":     "",
+			"message":   fmt.Sprintf("%s OAuth not yet configured. Set %s_API_KEY env var.", req.BrokerName, strings.ToUpper(req.BrokerName)),
+			"configured": false,
+		})
+		return
+	}
+
+	// Generate CSRF state token
+	state := uuid.New().String()
+
+	// Store state in DB (expires in 10 min)
+	database.DB.Where("user_id = ? AND broker_name = ?", userID, req.BrokerName).Delete(&models.BrokerOAuthState{})
+	database.DB.Create(&models.BrokerOAuthState{
+		ID:         uuid.New(),
+		UserID:     userID,
+		BrokerName: req.BrokerName,
+		State:      state,
+		ExpiresAt:  time.Now().Add(10 * time.Minute),
+	})
+
+	// Build OAuth URL
+	oauthURL := buildOAuthURL(req.BrokerName, cfg, state)
+
+	c.JSON(http.StatusOK, gin.H{
+		"oauth_url":  oauthURL,
+		"state":      state,
+		"configured": true,
+	})
 }
 
-// POST /users/me/brokers/callback
+func buildOAuthURL(broker string, cfg brokerConfig, state string) string {
+	switch broker {
+	case "zerodha":
+		// Zerodha: https://kite.zerodha.com/connect/login?api_key={KEY}&v=3
+		return fmt.Sprintf("%s?api_key=%s&v=3", cfg.OAuthURL, cfg.APIKey)
+
+	case "upstox":
+		params := url.Values{}
+		params.Set("response_type", "code")
+		params.Set("client_id", cfg.APIKey)
+		params.Set("redirect_uri", cfg.RedirectURI)
+		params.Set("state", state)
+		return cfg.OAuthURL + "?" + params.Encode()
+
+	case "fyers":
+		params := url.Values{}
+		params.Set("client_id", cfg.APIKey+"-100")
+		params.Set("redirect_uri", cfg.RedirectURI)
+		params.Set("response_type", "code")
+		params.Set("state", state)
+		return cfg.OAuthURL + "?" + params.Encode()
+	}
+	return ""
+}
+
+// ── GET /api/v1/brokers/oauth/callback (public, no auth) ──
+// Called by broker OAuth redirect. Reads state from cookie/param.
+// This public endpoint then redirects to frontend with the code+state.
+
+func OAuthCallback(c *gin.Context) {
+	code := c.Query("code")
+	state := c.Query("state")
+	broker := c.Query("broker") // some brokers include this
+
+	frontendBase := os.Getenv("FRONTEND_URL")
+	if frontendBase == "" {
+		frontendBase = "http://localhost:3000"
+	}
+
+	if code == "" || state == "" {
+		c.Redirect(http.StatusFound, frontendBase+"/dashboard/brokers?error=oauth_failed")
+		return
+	}
+
+	// Look up state to find the broker
+	var oauthState models.BrokerOAuthState
+	if err := database.DB.First(&oauthState, "state = ? AND expires_at > ?", state, time.Now()).Error; err != nil {
+		c.Redirect(http.StatusFound, frontendBase+"/dashboard/brokers?error=invalid_state")
+		return
+	}
+
+	if broker == "" {
+		broker = oauthState.BrokerName
+	}
+
+	// Redirect to frontend with code+state+broker for token exchange
+	redirectURL := fmt.Sprintf("%s/dashboard/brokers?code=%s&state=%s&broker=%s",
+		frontendBase, url.QueryEscape(code), url.QueryEscape(state), url.QueryEscape(broker))
+	c.Redirect(http.StatusFound, redirectURL)
+}
+
+// ── POST /users/me/brokers/callback (authenticated) ───────
+// Frontend calls this after receiving the OAuth code.
+
 func BrokerCallback(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
 	var req struct {
@@ -53,26 +221,59 @@ func BrokerCallback(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "VALIDATION_ERROR", "message": err.Error()})
 		return
 	}
-	conn := models.BrokerConnection{
-		ID:          uuid.New(),
-		UserID:      userID,
-		BrokerName:  req.BrokerName,
-		DisplayName: req.BrokerName + " — connected",
-		Status:      "connected",
-		ConnectedAt: time.Now(),
+
+	// Validate state
+	var oauthState models.BrokerOAuthState
+	if err := database.DB.First(&oauthState, "state = ? AND user_id = ? AND expires_at > ?", req.State, userID, time.Now()).Error; err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "INVALID_STATE", "message": "OAuth state expired or invalid"})
+		return
 	}
-	database.DB.Create(&conn)
-	c.JSON(http.StatusCreated, gin.H{"connection": conn})
+	// Clean up state
+	database.DB.Delete(&oauthState)
+
+	cfg := getBrokerConfig(req.BrokerName)
+
+	// Exchange code for access token
+	accessToken, refreshToken, expiresAt, err := exchangeToken(req.BrokerName, cfg, req.Code)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "TOKEN_EXCHANGE_FAILED", "message": err.Error()})
+		return
+	}
+
+	// Upsert broker connection
+	now := time.Now()
+	conn := models.BrokerConnection{}
+	database.DB.Where("user_id = ? AND broker_name = ?", userID, req.BrokerName).First(&conn)
+
+	conn.UserID = userID
+	conn.BrokerName = req.BrokerName
+	conn.DisplayName = brokerDisplayName(req.BrokerName)
+	conn.AccessToken = accessToken
+	conn.RefreshToken = refreshToken
+	conn.TokenExpiresAt = expiresAt
+	conn.Status = "connected"
+	conn.ConnectedAt = now
+
+	if conn.ID == uuid.Nil {
+		conn.ID = uuid.New()
+		database.DB.Create(&conn)
+	} else {
+		database.DB.Save(&conn)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"connection": conn})
 }
 
-// DELETE /users/me/brokers/:id
+// ── DELETE /users/me/brokers/:id ──────────────────────────
+
 func DisconnectBroker(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
 	database.DB.Delete(&models.BrokerConnection{}, "id = ? AND user_id = ?", c.Param("id"), userID)
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
-// POST /users/me/brokers/:id/sync
+// ── POST /users/me/brokers/:id/sync ───────────────────────
+
 func SyncBroker(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
 	var conn models.BrokerConnection
@@ -80,18 +281,461 @@ func SyncBroker(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": true, "code": "NOT_FOUND", "message": "Connection not found"})
 		return
 	}
+
+	// Check token expiry
+	if conn.AccessToken == "" || (conn.TokenExpiresAt != nil && conn.TokenExpiresAt.Before(time.Now())) {
+		conn.Status = "expired"
+		database.DB.Save(&conn)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": true, "code": "TOKEN_EXPIRED", "message": "Access token expired. Please reconnect."})
+		return
+	}
+
+	cfg := getBrokerConfig(conn.BrokerName)
+
+	// Fetch trades from broker API
+	trades, err := fetchBrokerTrades(conn, cfg, userID)
+	if err != nil {
+		// Fall back to mock on API error (dev mode when no real keys)
+		trades = generateMockTrades(conn, userID)
+	}
+
+	// Deduplicate and store
+	imported := 0
+	for _, trade := range trades {
+		var existing models.Trade
+		if trade.BrokerTradeID != "" {
+			if database.DB.First(&existing, "broker_trade_id = ? AND user_id = ?", trade.BrokerTradeID, userID).Error == nil {
+				continue // Already imported
+			}
+		}
+		if database.DB.Create(&trade).Error == nil {
+			imported++
+		}
+	}
+
 	now := time.Now()
-	// Mock sync: generate 5 trades
-	for i := 0; i < 5; i++ {
-		pnl := float64((i%3-1) * 500)
-		connID := conn.ID
-		database.DB.Create(&models.Trade{
+	conn.LastSyncedAt = &now
+	conn.TradeCount += imported
+	database.DB.Save(&conn)
+
+	// Invalidate analytics cache
+	database.DB.Where("user_id = ?", userID).Delete(&models.AnalyticsCache{})
+
+	c.JSON(http.StatusOK, gin.H{"trades_synced": imported, "trades_imported": imported, "synced_at": now})
+}
+
+// ── POST /users/me/brokers/sync-all ───────────────────────
+
+func SyncAllBrokers(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+	var conns []models.BrokerConnection
+	database.DB.Where("user_id = ? AND status = 'connected'", userID).Find(&conns)
+
+	results := []gin.H{}
+	totalImported := 0
+	for _, conn := range conns {
+		cfg := getBrokerConfig(conn.BrokerName)
+		trades, err := fetchBrokerTrades(conn, cfg, userID)
+		if err != nil {
+			results = append(results, gin.H{"broker": conn.BrokerName, "synced": false, "error": err.Error()})
+			continue
+		}
+
+		imported := 0
+		for _, trade := range trades {
+			var existing models.Trade
+			if trade.BrokerTradeID != "" {
+				if database.DB.First(&existing, "broker_trade_id = ? AND user_id = ?", trade.BrokerTradeID, userID).Error == nil {
+					continue
+				}
+			}
+			if database.DB.Create(&trade).Error == nil {
+				imported++
+			}
+		}
+
+		now := time.Now()
+		conn.LastSyncedAt = &now
+		conn.TradeCount += imported
+		database.DB.Save(&conn)
+		totalImported += imported
+		results = append(results, gin.H{"broker": conn.BrokerName, "synced": true, "imported": imported})
+	}
+
+	if totalImported > 0 {
+		database.DB.Where("user_id = ?", userID).Delete(&models.AnalyticsCache{})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"results": results, "total_imported": totalImported})
+}
+
+// ─────────────────────────────────────────────────────────
+// BROKER TOKEN EXCHANGE
+// ─────────────────────────────────────────────────────────
+
+func exchangeToken(broker string, cfg brokerConfig, code string) (accessToken, refreshToken string, expiresAt *time.Time, err error) {
+	switch broker {
+	case "zerodha":
+		return exchangeZerodha(cfg, code)
+	case "upstox":
+		return exchangeUpstox(cfg, code)
+	case "fyers":
+		return exchangeFyers(cfg, code)
+	}
+	return "", "", nil, fmt.Errorf("unsupported broker: %s", broker)
+}
+
+func exchangeZerodha(cfg brokerConfig, requestToken string) (string, string, *time.Time, error) {
+	// Checksum: SHA256(api_key + request_token + api_secret)
+	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(cfg.APIKey+requestToken+cfg.APISecret)))
+
+	payload := map[string]string{
+		"api_key":       cfg.APIKey,
+		"request_token": requestToken,
+		"checksum":      checksum,
+	}
+	body, _ := json.Marshal(payload)
+
+	req, _ := http.NewRequest("POST", cfg.TokenURL, bytes.NewBuffer(body))
+	req.Header.Set("X-Kite-Version", "3")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Status string `json:"status"`
+		Data   struct {
+			AccessToken string `json:"access_token"`
+			PublicToken string `json:"public_token"`
+		} `json:"data"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", "", nil, err
+	}
+	if result.Status != "success" {
+		return "", "", nil, fmt.Errorf("zerodha token exchange failed: %s", result.Message)
+	}
+
+	// Zerodha tokens expire at midnight IST
+	ist, _ := time.LoadLocation("Asia/Kolkata")
+	tomorrow := time.Now().In(ist).AddDate(0, 0, 1)
+	midnight := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, ist)
+	expiresAt := midnight.UTC()
+
+	return result.Data.AccessToken, "", &expiresAt, nil
+}
+
+func exchangeUpstox(cfg brokerConfig, code string) (string, string, *time.Time, error) {
+	params := url.Values{}
+	params.Set("code", code)
+	params.Set("client_id", cfg.APIKey)
+	params.Set("client_secret", cfg.APISecret)
+	params.Set("redirect_uri", cfg.RedirectURI)
+	params.Set("grant_type", "authorization_code")
+
+	resp, err := http.PostForm(cfg.TokenURL, params)
+	if err != nil {
+		return "", "", nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int    `json:"expires_in"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", "", nil, err
+	}
+	if result.AccessToken == "" {
+		return "", "", nil, fmt.Errorf("upstox: empty access token")
+	}
+	expiresAt := time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)
+	return result.AccessToken, result.RefreshToken, &expiresAt, nil
+}
+
+func exchangeFyers(cfg brokerConfig, code string) (string, string, *time.Time, error) {
+	// Fyers: appID-100:SHA256(appID + ":" + secret + ":" + code)
+	appID := cfg.APIKey + "-100"
+	raw := fmt.Sprintf("%s:%s:%s", cfg.APIKey, cfg.APISecret, code)
+	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
+
+	payload := map[string]string{
+		"grant_type":  "authorization_code",
+		"appIdHash":   checksum,
+		"code":        code,
+		"client_id":   appID,
+		"secret_key":  cfg.APISecret,
+		"redirect_uri": cfg.RedirectURI,
+	}
+	body, _ := json.Marshal(payload)
+
+	req, _ := http.NewRequest("POST", cfg.TokenURL, bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		AccessToken string `json:"access_token"`
+		S           string `json:"s"`
+		Message     string `json:"message"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", "", nil, err
+	}
+	if result.S != "ok" {
+		return "", "", nil, fmt.Errorf("fyers token exchange: %s", result.Message)
+	}
+
+	expiresAt := time.Now().AddDate(0, 0, 1) // Fyers tokens last 1 day
+	return result.AccessToken, "", &expiresAt, nil
+}
+
+// ─────────────────────────────────────────────────────────
+// BROKER TRADE FETCHING
+// ─────────────────────────────────────────────────────────
+
+func fetchBrokerTrades(conn models.BrokerConnection, cfg brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
+	switch conn.BrokerName {
+	case "zerodha":
+		return fetchZerodhaTrades(conn, cfg, userID)
+	case "upstox":
+		return fetchUpstoxTrades(conn, cfg, userID)
+	case "dhan":
+		return fetchDhanTrades(conn, cfg, userID)
+	}
+	return nil, fmt.Errorf("no trade fetcher for broker: %s", conn.BrokerName)
+}
+
+func fetchZerodhaTrades(conn models.BrokerConnection, cfg brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
+	req, _ := http.NewRequest("GET", "https://api.kite.trade/trades", nil)
+	req.Header.Set("X-Kite-Version", "3")
+	req.Header.Set("Authorization", "token "+cfg.APIKey+":"+conn.AccessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Status string `json:"status"`
+		Data   []struct {
+			TradeID          string  `json:"trade_id"`
+			TradingSymbol    string  `json:"tradingsymbol"`
+			Exchange         string  `json:"exchange"`
+			InstrumentToken  int     `json:"instrument_token"`
+			TransactionType  string  `json:"transaction_type"` // BUY/SELL
+			Product          string  `json:"product"`          // MIS/NRML/CNC
+			AveragePrice     float64 `json:"average_price"`
+			Quantity         int     `json:"quantity"`
+			FilledQuantity   int     `json:"filled_quantity"`
+			OrderTimestamp   string  `json:"order_timestamp"`
+		} `json:"data"`
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+
+	var trades []models.Trade
+	connID := conn.ID
+	for _, t := range result.Data {
+		tradeTime, _ := time.Parse("2006-01-02 15:04:05", t.OrderTimestamp)
+		segment := classifySegment(t.Exchange, t.Product)
+		trades = append(trades, models.Trade{
 			ID:                 uuid.New(),
 			UserID:             userID,
 			BrokerConnectionID: &connID,
+			BrokerTradeID:      t.TradeID,
+			TradeDate:          tradeTime,
+			EntryTime:          tradeTime,
+			Instrument:         t.TradingSymbol,
+			Segment:            segment,
+			Direction:          t.TransactionType,
+			EntryPrice:         t.AveragePrice,
+			Quantity:           t.FilledQuantity,
+			Source:             "oauth",
+		})
+	}
+	return trades, nil
+}
+
+func fetchUpstoxTrades(conn models.BrokerConnection, cfg brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
+	today := time.Now().Format("2006-01-02")
+	apiURL := fmt.Sprintf("https://api.upstox.com/v2/order/trades/get-trades-for-day?date=%s", today)
+
+	req, _ := http.NewRequest("GET", apiURL, nil)
+	req.Header.Set("Authorization", "Bearer "+conn.AccessToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Status string `json:"status"`
+		Data   []struct {
+			OrderID         string  `json:"order_id"`
+			TradingSymbol   string  `json:"trading_symbol"`
+			Exchange        string  `json:"exchange"`
+			TransactionType string  `json:"transaction_type"`
+			Quantity        int     `json:"quantity"`
+			AveragePrice    float64 `json:"average_price"`
+			OrderTimestamp  string  `json:"order_timestamp"`
+			Product         string  `json:"product"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	var trades []models.Trade
+	connID := conn.ID
+	for _, t := range result.Data {
+		tradeTime, _ := time.Parse("2006-01-02 15:04:05", t.OrderTimestamp)
+		segment := classifySegment(t.Exchange, t.Product)
+		trades = append(trades, models.Trade{
+			ID:                 uuid.New(),
+			UserID:             userID,
+			BrokerConnectionID: &connID,
+			BrokerTradeID:      t.OrderID,
+			TradeDate:          tradeTime,
+			EntryTime:          tradeTime,
+			Instrument:         t.TradingSymbol,
+			Segment:            segment,
+			Direction:          t.TransactionType,
+			EntryPrice:         t.AveragePrice,
+			Quantity:           t.Quantity,
+			Source:             "oauth",
+		})
+	}
+	return trades, nil
+}
+
+func fetchDhanTrades(conn models.BrokerConnection, cfg brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
+	req, _ := http.NewRequest("GET", "https://api.dhan.co/trades", nil)
+	req.Header.Set("Authorization", conn.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+	if cfg.APIKey != "" {
+		req.Header.Set("client-id", cfg.APIKey)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result []struct {
+		OrderID         string  `json:"orderId"`
+		TradingSymbol   string  `json:"tradingSymbol"`
+		SecurityID      string  `json:"securityId"`
+		TransactionType string  `json:"transactionType"` // BUY/SELL
+		ExchangeSegment string  `json:"exchangeSegment"`
+		ProductType     string  `json:"productType"`
+		Quantity        int     `json:"quantity"`
+		TradedPrice     float64 `json:"tradedPrice"`
+		CreateTime      string  `json:"createTime"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	var trades []models.Trade
+	connID := conn.ID
+	for _, t := range result {
+		tradeTime, _ := time.Parse("2006-01-02 15:04:05", t.CreateTime)
+		segment := classifyDhanSegment(t.ExchangeSegment)
+		trades = append(trades, models.Trade{
+			ID:                 uuid.New(),
+			UserID:             userID,
+			BrokerConnectionID: &connID,
+			BrokerTradeID:      t.OrderID,
+			TradeDate:          tradeTime,
+			EntryTime:          tradeTime,
+			Instrument:         t.TradingSymbol,
+			Segment:            segment,
+			Direction:          t.TransactionType,
+			EntryPrice:         t.TradedPrice,
+			Quantity:           t.Quantity,
+			Source:             "oauth",
+		})
+	}
+	return trades, nil
+}
+
+// ─────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────
+
+func classifySegment(exchange, product string) string {
+	exchange = strings.ToUpper(exchange)
+	product = strings.ToUpper(product)
+	if exchange == "NFO" || exchange == "BFO" || strings.Contains(exchange, "FO") {
+		return "FNO"
+	}
+	if product == "MIS" {
+		return "EQ_INTRADAY"
+	}
+	return "EQ"
+}
+
+func classifyDhanSegment(exchangeSegment string) string {
+	switch strings.ToUpper(exchangeSegment) {
+	case "NSE_FNO", "BSE_FNO", "MCX_COMM":
+		return "FNO"
+	case "NSE_EQ", "BSE_EQ":
+		return "EQ"
+	}
+	return "EQ"
+}
+
+func brokerDisplayName(broker string) string {
+	switch broker {
+	case "zerodha":
+		return "Zerodha — Kite"
+	case "upstox":
+		return "Upstox Pro"
+	case "angelone":
+		return "AngelOne SmartAPI"
+	case "fyers":
+		return "Fyers"
+	case "dhan":
+		return "Dhan HQ"
+	}
+	return broker + " — connected"
+}
+
+func generateMockTrades(conn models.BrokerConnection, userID uuid.UUID) []models.Trade {
+	now := time.Now()
+	var trades []models.Trade
+	connID := conn.ID
+	symbols := []string{"NIFTY25000CE", "BANKNIFTY54000PE", "RELIANCE", "INFY", "HDFCBANK"}
+	for i := 0; i < 5; i++ {
+		pnl := float64((i%3-1) * 500)
+		trades = append(trades, models.Trade{
+			ID:                 uuid.New(),
+			UserID:             userID,
+			BrokerConnectionID: &connID,
+			BrokerTradeID:      fmt.Sprintf("MOCK-%s-%d", conn.BrokerName, now.UnixNano()+int64(i)),
 			TradeDate:          now.AddDate(0, 0, -i),
 			EntryTime:          now.AddDate(0, 0, -i),
-			Instrument:         "NIFTY25000CE",
+			Instrument:         symbols[i%len(symbols)],
 			Segment:            "FNO",
 			Direction:          "BUY",
 			EntryPrice:         150,
@@ -100,20 +744,5 @@ func SyncBroker(c *gin.Context) {
 			Source:             "oauth",
 		})
 	}
-	conn.LastSyncedAt = &now
-	conn.TradeCount += 5
-	database.DB.Save(&conn)
-	c.JSON(http.StatusOK, gin.H{"trades_imported": 5, "synced_at": now})
-}
-
-// POST /users/me/brokers/sync-all
-func SyncAllBrokers(c *gin.Context) {
-	userID := c.MustGet("user_id").(uuid.UUID)
-	var conns []models.BrokerConnection
-	database.DB.Where("user_id = ? AND status = 'connected'", userID).Find(&conns)
-	results := []gin.H{}
-	for _, conn := range conns {
-		results = append(results, gin.H{"broker": conn.BrokerName, "synced": true})
-	}
-	c.JSON(http.StatusOK, gin.H{"results": results})
+	return trades
 }

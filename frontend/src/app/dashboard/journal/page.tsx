@@ -1,41 +1,68 @@
 'use client'
 import { useDateRange } from '@/context/DateRangeContext'
-import { Trade } from '@/lib/mockData'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { tradesAPI } from '@/lib/api'
+import { useAuth } from '@/context/AuthContext'
 
 const EMOTION_EMOJI: Record<string, string> = {
   calm: '😌', confident: '💪', anxious: '😰', frustrated: '😤', bored: '😑', fomo: '🤑',
 }
 
-function TradeRow({ trade }: { trade: Trade }) {
+// Normalise a trade from either the mock format or the API format
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeTrade(t: any) {
+  return {
+    id: t.id,
+    date: t.date ?? t.trade_date?.slice(0, 10),
+    instrument: t.instrument,
+    segment: t.segment ?? '',
+    direction: t.direction ?? '',
+    entryTime: t.entryTime ?? t.entry_time?.slice(11, 16) ?? '--:--',
+    exitTime: t.exitTime ?? t.exit_time?.slice(11, 16) ?? '--:--',
+    pnl: t.pnl ?? t.net_pnl ?? 0,
+    emotion: t.emotion ?? '',
+    setupRating: t.setupRating ?? t.setup_rating ?? '',
+    followedPlan: t.followedPlan ?? t.followed_plan ?? true,
+    stopLossMoved: t.stopLossMoved ?? t.stop_loss_moved ?? false,
+    reEntryAfterLoss: t.reEntryAfterLoss ?? t.re_entry_after_loss ?? false,
+    entryPrice: t.entryPrice ?? t.entry_price ?? 0,
+    exitPrice: t.exitPrice ?? t.exit_price ?? 0,
+    quantity: t.quantity ?? 0,
+    day: t.day ?? new Date(t.date ?? t.trade_date).toLocaleDateString('en-US', { weekday: 'short' }),
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function TradeRow({ trade }: { trade: any }) {
   const [expanded, setExpanded] = useState(false)
+  const t = normalizeTrade(trade)
   return (
     <>
       <tr onClick={() => setExpanded(!expanded)} style={{ cursor: 'pointer' }}>
-        <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>{trade.date}</td>
+        <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>{t.date}</td>
         <td>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>{trade.instrument}</div>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.6rem', color: 'var(--color-text-muted)' }}>{trade.segment} · {trade.direction}</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>{t.instrument}</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.6rem', color: 'var(--color-text-muted)' }}>{t.segment} · {t.direction}</div>
         </td>
         <td className="col-number" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-          {trade.entryTime}–{trade.exitTime}
+          {t.entryTime}–{t.exitTime}
         </td>
-        <td className={`col-number ${trade.pnl >= 0 ? 'col-positive' : 'col-negative'}`}>
-          {trade.pnl >= 0 ? '+' : ''}₹{trade.pnl.toLocaleString('en-IN')}
-        </td>
-        <td>
-          <span style={{ fontSize: '1rem' }}>{EMOTION_EMOJI[trade.emotion] || '😐'}</span>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-text-muted)', marginLeft: '0.25rem', textTransform: 'capitalize' }}>{trade.emotion}</span>
+        <td className={`col-number ${t.pnl >= 0 ? 'col-positive' : 'col-negative'}`}>
+          {t.pnl >= 0 ? '+' : ''}₹{t.pnl.toLocaleString('en-IN')}
         </td>
         <td>
-          <span className={`badge ${trade.setupRating === 'A' ? 'badge-green' : trade.setupRating === 'B' ? 'badge-amber' : 'badge-red'}`}>{trade.setupRating}</span>
+          <span style={{ fontSize: '1rem' }}>{EMOTION_EMOJI[t.emotion] || '😐'}</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-text-muted)', marginLeft: '0.25rem', textTransform: 'capitalize' }}>{t.emotion || '—'}</span>
+        </td>
+        <td>
+          <span className={`badge ${t.setupRating === 'A' ? 'badge-green' : t.setupRating === 'B' ? 'badge-amber' : 'badge-red'}`}>{t.setupRating || '—'}</span>
         </td>
         <td>
           <div style={{ display: 'flex', gap: '0.25rem' }}>
-            {!trade.followedPlan && <span className="badge badge-red" style={{ fontSize: '0.55rem' }}>Off-Plan</span>}
-            {trade.stopLossMoved && <span className="badge badge-amber" style={{ fontSize: '0.55rem' }}>SL Moved</span>}
-            {trade.reEntryAfterLoss && <span className="badge badge-red" style={{ fontSize: '0.55rem' }}>Revenge</span>}
-            {trade.followedPlan && !trade.stopLossMoved && !trade.reEntryAfterLoss && <span className="badge badge-green" style={{ fontSize: '0.55rem' }}>Clean</span>}
+            {!t.followedPlan && <span className="badge badge-red" style={{ fontSize: '0.55rem' }}>Off-Plan</span>}
+            {t.stopLossMoved && <span className="badge badge-amber" style={{ fontSize: '0.55rem' }}>SL Moved</span>}
+            {t.reEntryAfterLoss && <span className="badge badge-red" style={{ fontSize: '0.55rem' }}>Revenge</span>}
+            {t.followedPlan && !t.stopLossMoved && !t.reEntryAfterLoss && <span className="badge badge-green" style={{ fontSize: '0.55rem' }}>Clean</span>}
           </div>
         </td>
         <td style={{ textAlign: 'right', fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>{expanded ? '▲' : '▼'}</td>
@@ -44,14 +71,10 @@ function TradeRow({ trade }: { trade: Trade }) {
         <tr>
           <td colSpan={8} style={{ padding: '0.75rem', background: 'var(--color-bg-secondary)' }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
-              <div><span className="data-label">Entry Price</span><div style={{ color: 'var(--color-text-primary)' }}>₹{trade.entryPrice}</div></div>
-              <div><span className="data-label">Exit Price</span><div style={{ color: 'var(--color-text-primary)' }}>₹{trade.exitPrice}</div></div>
-              <div><span className="data-label">Quantity</span><div style={{ color: 'var(--color-text-primary)' }}>{trade.quantity}</div></div>
-              <div><span className="data-label">Day</span><div style={{ color: 'var(--color-text-primary)' }}>{trade.day}</div></div>
-            </div>
-            <div style={{ marginTop: '0.5rem', padding: '0.5rem', background: 'var(--color-bg-card)', borderRadius: 3 }}>
-              <span className="data-label" style={{ display: 'block', marginBottom: '0.25rem' }}>Add Notes</span>
-              <textarea className="input-field" placeholder="What did you learn from this trade?" style={{ width: '100%', resize: 'vertical', minHeight: 60, fontSize: '0.75rem' }} />
+              <div><span className="data-label">Entry Price</span><div style={{ color: 'var(--color-text-primary)' }}>₹{t.entryPrice}</div></div>
+              <div><span className="data-label">Exit Price</span><div style={{ color: 'var(--color-text-primary)' }}>₹{t.exitPrice}</div></div>
+              <div><span className="data-label">Quantity</span><div style={{ color: 'var(--color-text-primary)' }}>{t.quantity}</div></div>
+              <div><span className="data-label">Day</span><div style={{ color: 'var(--color-text-primary)' }}>{t.day}</div></div>
             </div>
           </td>
         </tr>
@@ -61,17 +84,36 @@ function TradeRow({ trade }: { trade: Trade }) {
 }
 
 export default function JournalPage() {
-  const { trades, insights } = useDateRange()
+  const { insights, hasRealData, range } = useDateRange()
+  const { isAuthenticated } = useAuth()
   const [filter, setFilter] = useState<'all' | 'wins' | 'losses' | 'revenge' | 'offplan'>('all')
   const [emotionFilter, setEmotionFilter] = useState<string>('all')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [apiTrades, setApiTrades] = useState<any[]>([])
+  const [loadingTrades, setLoadingTrades] = useState(false)
 
-  const filtered = trades.filter(t => {
-    if (filter === 'wins') return t.pnl > 0
-    if (filter === 'losses') return t.pnl < 0
-    if (filter === 'revenge') return t.reEntryAfterLoss
-    if (filter === 'offplan') return !t.followedPlan
-    return true
-  }).filter(t => emotionFilter === 'all' || t.emotion === emotionFilter)
+  useEffect(() => {
+    if (!isAuthenticated || !hasRealData) return
+    setLoadingTrades(true)
+    tradesAPI.list({ limit: 500 })
+      .then(res => setApiTrades(res.data.trades ?? res.data.data ?? []))
+      .catch(() => setApiTrades([]))
+      .finally(() => setLoadingTrades(false))
+  }, [isAuthenticated, hasRealData, range])
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sourceTrades: any[] = hasRealData && apiTrades.length > 0 ? apiTrades : []
+
+  const filtered = sourceTrades
+    .map(normalizeTrade)
+    .filter(t => {
+      if (filter === 'wins') return t.pnl > 0
+      if (filter === 'losses') return t.pnl < 0
+      if (filter === 'revenge') return t.reEntryAfterLoss
+      if (filter === 'offplan') return !t.followedPlan
+      return true
+    })
+    .filter(t => emotionFilter === 'all' || t.emotion === emotionFilter)
 
   return (
     <div className="page-enter" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -83,7 +125,7 @@ export default function JournalPage() {
           { label: 'Wins', value: insights.wins, cls: 'data-value-positive' },
           { label: 'Losses', value: insights.losses, cls: 'data-value-negative' },
           { label: 'Revenge Trades', value: insights.revengeTradeCount, cls: insights.revengeTradeCount > 0 ? 'data-value-negative' : 'data-value-positive' },
-          { label: 'Off-Plan', value: trades.filter(t => !t.followedPlan).length, cls: 'data-value-amber' },
+          { label: 'Shown', value: filtered.length, cls: 'data-value-amber' },
         ].map(s => (
           <div key={s.label} className="kpi-card">
             <span className="data-label">{s.label}</span>
@@ -125,7 +167,11 @@ export default function JournalPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map(trade => <TradeRow key={trade.id} trade={trade} />)}
+              {loadingTrades ? (
+                <tr><td colSpan={8} style={{ textAlign: 'center', padding: '2rem', fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>Loading trades...</td></tr>
+              ) : (
+                filtered.map(trade => <TradeRow key={trade.id} trade={trade} />)
+              )}
             </tbody>
           </table>
         </div>
@@ -137,7 +183,9 @@ export default function JournalPage() {
       </div>
 
       <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>
-        Showing {filtered.length} of {trades.length} trades. Click any row to expand and add notes.
+        {!hasRealData
+          ? 'Connect a broker or upload trades to see your journal.'
+          : `Showing ${filtered.length} of ${sourceTrades.length} trades. Click any row to expand.`}
       </div>
     </div>
   )

@@ -12,7 +12,7 @@ import (
 // GET /users/me
 func GetMe(c *gin.Context) {
 	user := c.MustGet("user").(models.User)
-	c.JSON(http.StatusOK, user)
+	c.JSON(http.StatusOK, gin.H{"user": user})
 }
 
 // PATCH /users/me
@@ -35,5 +35,5 @@ func UpdateMe(c *gin.Context) {
 	}
 	database.DB.Model(&user).Updates(updates)
 	database.DB.First(&user, "id = ?", user.ID)
-	c.JSON(http.StatusOK, user)
+	c.JSON(http.StatusOK, gin.H{"user": user})
 }

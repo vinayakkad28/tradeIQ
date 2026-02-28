@@ -1,5 +1,7 @@
 'use client'
 import { useState, useRef, DragEvent } from 'react'
+import { tradesAPI } from '@/lib/api'
+import { useDateRange } from '@/context/DateRangeContext'
 
 const BROKER_FORMATS = [
   { name: 'Zerodha',  cols: 'trade_id, tradingsymbol, trade_type, …' },
@@ -17,6 +19,7 @@ export default function UploadPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const { refetch } = useDateRange()
 
   const handleDrop = (e: DragEvent) => {
     e.preventDefault()
@@ -28,13 +31,30 @@ export default function UploadPage() {
 
   const handleUpload = async () => {
     if (!file) return
+    if (file.size > 10 * 1024 * 1024) {
+      setError('File too large. Maximum 10 MB allowed.')
+      return
+    }
     setLoading(true)
     setError(null)
-    // Simulate API response
-    setTimeout(() => {
-      setResult({ accepted: 47, rejected: 2, broker_detected: 'Zerodha (auto-detected)' })
+    try {
+      const res = await tradesAPI.ingestCSV(file)
+      const d = res.data
+      setResult({
+        accepted: d.accepted ?? d.data?.accepted ?? 0,
+        rejected: d.rejected ?? d.data?.rejected ?? 0,
+        broker_detected: d.broker_detected ?? d.data?.broker_detected ?? 'Auto-detected',
+      })
+      // Refresh dashboard analytics with real data
+      refetch()
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        'Upload failed. Please check your CSV format and try again.'
+      setError(msg)
+    } finally {
       setLoading(false)
-    }, 1500)
+    }
   }
 
   return (

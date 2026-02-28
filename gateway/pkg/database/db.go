@@ -38,6 +38,7 @@ func Init() {
 	if err := DB.AutoMigrate(
 		&models.User{},
 		&models.RefreshToken{},
+		&models.BrokerOAuthState{},
 		&models.BrokerConnection{},
 		&models.Trade{},
 		&models.JournalEntry{},

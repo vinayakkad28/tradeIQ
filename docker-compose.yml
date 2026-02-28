@@ -43,7 +43,19 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change_this_in_production_please}
       GIN_MODE: release
       PORT: 8080
-      ENABLE_MOCK_SYNC: "true"
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # Broker OAuth keys (set in .env file)
+      ZERODHA_API_KEY: ${ZERODHA_API_KEY:-}
+      ZERODHA_API_SECRET: ${ZERODHA_API_SECRET:-}
+      UPSTOX_CLIENT_ID: ${UPSTOX_CLIENT_ID:-}
+      UPSTOX_CLIENT_SECRET: ${UPSTOX_CLIENT_SECRET:-}
+      FYERS_APP_ID: ${FYERS_APP_ID:-}
+      FYERS_SECRET_KEY: ${FYERS_SECRET_KEY:-}
+      ANGELONE_CLIENT_ID: ${ANGELONE_CLIENT_ID:-}
+      ANGELONE_CLIENT_SECRET: ${ANGELONE_CLIENT_SECRET:-}
+      DHAN_CLIENT_ID: ${DHAN_CLIENT_ID:-}
+      DHAN_ACCESS_TOKEN: ${DHAN_ACCESS_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy

@@ -141,4 +141,21 @@ export const reportsAPI = {
     api.post('/reports/weekly/generate', { week_start: weekStart }),
 }
 
+// ── MARKET ──────────────────────────────────────────────
+// Market endpoints are public (no auth required)
+const MARKET_BASE = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api/v1').replace('/api/v1', '')
+const marketApi = axios.create({ baseURL: MARKET_BASE + '/api/v1/market' })
+
+export const marketAPI = {
+  indices: () => marketApi.get('/indices'),
+  vix: () => marketApi.get('/vix'),
+  optionChain: (symbol = 'NIFTY', expiry?: string) =>
+    marketApi.get('/option-chain', { params: { symbol, expiry } }),
+  fiiDii: () => marketApi.get('/fii-dii'),
+  gainersLosers: (index?: string) =>
+    marketApi.get('/gainers-losers', { params: { index } }),
+  maxPain: (symbol: string, expiry: string) =>
+    marketApi.get('/max-pain', { params: { symbol, expiry } }),
+}
+
 export default api

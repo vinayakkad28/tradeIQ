@@ -8,10 +8,12 @@ import (
 	"tradeiq/gateway/internal/auth"
 	"tradeiq/gateway/internal/brokers"
 	"tradeiq/gateway/internal/journal"
+	"tradeiq/gateway/internal/market"
 	"tradeiq/gateway/internal/notifications"
 	"tradeiq/gateway/internal/reports"
 	"tradeiq/gateway/internal/trades"
 	"tradeiq/gateway/internal/users"
+	wshandler "tradeiq/gateway/internal/ws"
 	"tradeiq/gateway/pkg/database"
 	"tradeiq/gateway/pkg/middleware"
 
@@ -41,6 +43,20 @@ func main() {
 
 	// Demo (no auth)
 	r.GET("/api/v1/demo/analytics", analytics.GetDemoAnalytics)
+
+	// Broker OAuth public callback (broker redirects here after auth)
+	r.GET("/api/v1/brokers/oauth/callback", brokers.OAuthCallback)
+
+	// Market data — public, no auth required
+	mkt := r.Group("/api/v1/market")
+	{
+		mkt.GET("/indices", market.GetIndices)
+		mkt.GET("/vix", market.GetVIX)
+		mkt.GET("/option-chain", market.GetOptionChain)
+		mkt.GET("/fii-dii", market.GetFIIDII)
+		mkt.GET("/gainers-losers", market.GetGainersLosers)
+		mkt.GET("/max-pain", market.GetMaxPain)
+	}
 
 	v1 := r.Group("/api/v1")
 
@@ -104,6 +120,9 @@ func main() {
 			reportsGroup.GET("weekly/list", reports.ListReports)
 			reportsGroup.POST("weekly/generate", reports.GenerateReport)
 		}
+
+		// WebSocket live feed
+		protected.GET("ws/live", wshandler.HandleLive)
 	}
 
 	port := os.Getenv("PORT")

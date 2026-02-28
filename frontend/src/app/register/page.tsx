@@ -2,16 +2,34 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { useAuth } from '@/context/AuthContext'
 
 export default function RegisterPage() {
   const router = useRouter()
+  const { register } = useAuth()
   const [form, setForm] = useState({ fullName: '', email: '', password: '' })
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (form.password.length < 8) {
+      setError('Password must be at least 8 characters')
+      return
+    }
     setLoading(true)
-    setTimeout(() => router.push('/dashboard'), 800)
+    setError('')
+    try {
+      await register(form.email, form.password, form.fullName)
+      router.push('/dashboard')
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        'Registration failed. Please try again.'
+      setError(msg)
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -48,6 +66,11 @@ export default function RegisterPage() {
                 />
               </div>
             ))}
+            {error && (
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--color-negative)', padding: '0.5rem', background: 'var(--color-negative-dim)', borderRadius: 3 }}>
+                {error}
+              </div>
+            )}
             <button type="submit" className="btn-primary" disabled={loading} style={{ width: '100%', justifyContent: 'center', marginTop: '0.25rem' }}>
               {loading ? 'Creating account...' : 'Create Account →'}
             </button>

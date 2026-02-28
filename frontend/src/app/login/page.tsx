@@ -2,9 +2,11 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { useAuth } from '@/context/AuthContext'
 
 export default function LoginPage() {
   const router = useRouter()
+  const { login } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -14,10 +16,17 @@ export default function LoginPage() {
     e.preventDefault()
     setLoading(true)
     setError('')
-    // Demo: just redirect
-    setTimeout(() => {
+    try {
+      await login(email, password)
       router.push('/dashboard')
-    }, 800)
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        'Invalid email or password'
+      setError(msg)
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -48,6 +57,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 required
+                autoComplete="email"
               />
             </div>
             <div>
@@ -60,6 +70,7 @@ export default function LoginPage() {
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 required
+                autoComplete="current-password"
               />
             </div>
             {error && (

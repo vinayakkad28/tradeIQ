@@ -146,8 +146,8 @@ func ListTrades(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	if limit > 200 {
-		limit = 200
+	if limit > 1000 {
+		limit = 1000
 	}
 	offset := (page - 1) * limit
 
