@@ -5,12 +5,105 @@ import { brokerAPI } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
 
 const SUPPORTED_BROKERS = [
-  { id: 'zerodha',  name: 'Zerodha',   description: 'Kite API — OAuth 2.0',       logo: 'Z', color: '#387ed1', tokenBased: false },
-  { id: 'upstox',   name: 'Upstox',    description: 'Upstox Pro API v2',           logo: 'U', color: '#7ac231', tokenBased: false },
-  { id: 'angelone', name: 'AngelOne',  description: 'SmartAPI REST',               logo: 'A', color: '#f77f00', tokenBased: false },
-  { id: 'fyers',    name: 'Fyers',     description: 'Fyers API v3',                logo: 'F', color: '#1e6fd9', tokenBased: false },
-  { id: 'dhan',     name: 'Dhan',      description: 'Dhan HQ v2 — OAuth 2.0',      logo: 'D', color: '#6d2bff', tokenBased: false },
+  { id: 'zerodha',  name: 'Zerodha',   description: 'Kite API — OAuth 2.0',       logo: 'Z', color: '#387ed1', totpBased: false },
+  { id: 'upstox',   name: 'Upstox',    description: 'Upstox Pro API v2',           logo: 'U', color: '#7ac231', totpBased: false },
+  { id: 'angelone', name: 'AngelOne',  description: 'SmartAPI — TOTP login',       logo: 'A', color: '#f77f00', totpBased: true  },
+  { id: 'fyers',    name: 'Fyers',     description: 'Fyers API v3',                logo: 'F', color: '#1e6fd9', totpBased: false },
+  { id: 'dhan',     name: 'Dhan',      description: 'Dhan HQ v2 — OAuth 2.0',      logo: 'D', color: '#6d2bff', totpBased: false },
 ]
+
+// ── AngelOne TOTP Modal ───────────────────────────────────
+function AngelOneModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: (msg: string) => void }) {
+  const [form, setForm] = useState({ clientId: '', password: '', totp: '' })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!form.clientId || !form.password || !form.totp) {
+      setError('All fields are required.')
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      await brokerAPI.connectAngelOne(form.clientId, form.password, form.totp)
+      onSuccess('AngelOne connected! Trades will sync shortly.')
+      onClose()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+      setError(msg || 'Login failed. Check your Client ID, PIN, and TOTP.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="terminal-card" style={{ width: 360, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div style={{ width: 28, height: 28, borderRadius: 6, background: '#f77f00', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: '0.85rem', color: '#fff' }}>A</div>
+            <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '0.9rem', color: 'var(--color-text-primary)' }}>Connect AngelOne</span>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--color-text-muted)', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1 }}>✕</button>
+        </div>
+
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-text-muted)', lineHeight: 1.6, padding: '0.5rem 0.75rem', background: 'rgba(247,127,0,0.06)', borderRadius: 4, border: '1px solid rgba(247,127,0,0.15)' }}>
+          AngelOne uses TOTP-based auth. Open your authenticator app (Google Authenticator / Authy) linked to your Angel One account to get the 6-digit code.
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <label style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Client ID</label>
+            <input
+              type="text"
+              placeholder="e.g. A123456"
+              value={form.clientId}
+              onChange={e => setForm(f => ({ ...f, clientId: e.target.value.toUpperCase() }))}
+              style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', padding: '0.5rem 0.75rem', background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)', borderRadius: 4, color: 'var(--color-text-primary)', outline: 'none' }}
+              autoFocus
+            />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <label style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>PIN (4-digit password)</label>
+            <input
+              type="password"
+              placeholder="••••"
+              maxLength={6}
+              value={form.password}
+              onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+              style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', padding: '0.5rem 0.75rem', background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)', borderRadius: 4, color: 'var(--color-text-primary)', outline: 'none' }}
+            />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <label style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>TOTP (6-digit from authenticator)</label>
+            <input
+              type="text"
+              placeholder="123456"
+              maxLength={6}
+              inputMode="numeric"
+              value={form.totp}
+              onChange={e => setForm(f => ({ ...f, totp: e.target.value.replace(/\D/g, '') }))}
+              style={{ fontFamily: 'var(--font-mono)', fontSize: '1rem', padding: '0.5rem 0.75rem', background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)', borderRadius: 4, color: 'var(--color-text-primary)', outline: 'none', letterSpacing: '0.2em' }}
+            />
+          </div>
+
+          {error && (
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: 'var(--color-negative)', padding: '0.4rem 0.6rem', background: 'rgba(255,77,109,0.08)', borderRadius: 4 }}>
+              {error}
+            </div>
+          )}
+
+          <button type="submit" className="btn-primary" disabled={loading} style={{ width: '100%', justifyContent: 'center' }}>
+            {loading ? 'Connecting...' : 'Connect AngelOne'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
 
 type Connection = {
   id: string
@@ -64,6 +157,7 @@ export default function BrokersPage() {
   const [disconnecting, setDisconnecting] = useState<string | null>(null)
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [loadingList, setLoadingList] = useState(true)
+  const [showAngelOneModal, setShowAngelOneModal] = useState(false)
 
   const fetchConnections = async () => {
     if (!isAuthenticated) { setLoadingList(false); return }
@@ -87,6 +181,11 @@ export default function BrokersPage() {
   const handleConnect = async (brokerId: string) => {
     if (!isAuthenticated) {
       window.location.href = '/login'
+      return
+    }
+    // AngelOne uses TOTP modal instead of OAuth redirect
+    if (brokerId === 'angelone') {
+      setShowAngelOneModal(true)
       return
     }
     setConnecting(brokerId)
@@ -138,6 +237,19 @@ export default function BrokersPage() {
 
   return (
     <div className="page-enter" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+
+      {/* AngelOne TOTP modal */}
+      {showAngelOneModal && (
+        <AngelOneModal
+          onClose={() => setShowAngelOneModal(false)}
+          onSuccess={msg => {
+            setSyncMessage(msg)
+            setShowAngelOneModal(false)
+            fetchConnections()
+            setTimeout(() => setSyncMessage(null), 5000)
+          }}
+        />
+      )}
 
       {/* OAuth callback handler — must be inside Suspense for useSearchParams */}
       <Suspense fallback={null}>
@@ -252,7 +364,7 @@ export default function BrokersPage() {
         <div className="section-header"><span className="section-header-text">How Broker Sync Works</span></div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
           {[
-            { step: '01', title: 'OAuth Authorization', desc: 'Click Connect. You\'ll be redirected to your broker to authorize TradeIQ (read-only access to trade history).' },
+            { step: '01', title: 'Authorize', desc: 'Click Connect. OAuth brokers (Zerodha, Upstox, Fyers, Dhan) redirect you to their site. AngelOne uses a TOTP modal — no redirect needed.' },
             { step: '02', title: 'Auto Import', desc: 'TradeIQ pulls your last 6 months of trades. Auto-detects segment, instrument type, P&L, and timing.' },
             { step: '03', title: 'Daily Sync', desc: 'Trades sync automatically every morning at 6 AM IST. Or click Sync Now for immediate refresh.' },
           ].map(item => (

@@ -70,6 +70,9 @@ export const brokerAPI = {
   /** For token-based brokers (Dhan). Passes access_token directly — no OAuth redirect. */
   connectWithToken: (brokerName: string, accessToken: string) =>
     api.post('/users/me/brokers/connect', { broker_name: brokerName, access_token: accessToken }),
+  /** AngelOne TOTP direct login — no OAuth redirect. */
+  connectAngelOne: (clientId: string, password: string, totp: string) =>
+    api.post('/users/me/brokers/connect', { broker_name: 'angelone', client_id: clientId, password, totp }),
   callback: (brokerName: string, code: string, state: string) =>
     api.post('/users/me/brokers/callback', { broker_name: brokerName, code, state }),
   disconnect: (id: string) => api.delete(`/users/me/brokers/${id}`),

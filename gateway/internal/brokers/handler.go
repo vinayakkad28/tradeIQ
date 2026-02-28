@@ -107,9 +107,60 @@ func ConnectBroker(c *gin.Context) {
 		BrokerName  string `json:"broker_name" binding:"required"`
 		AccessToken string `json:"access_token"` // For token-based brokers (Dhan, AngelOne)
 		ClientID    string `json:"client_id"`    // Optional — Dhan client ID for display
+		// AngelOne TOTP direct login
+		Password string `json:"password"`
+		TOTP     string `json:"totp"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "VALIDATION_ERROR", "message": err.Error()})
+		return
+	}
+
+	// ── AngelOne: TOTP-based direct login (no OAuth redirect) ──
+	if req.BrokerName == "angelone" {
+		cfg := getBrokerConfig("angelone")
+		if cfg.APIKey == "" {
+			c.JSON(http.StatusOK, gin.H{
+				"configured": false,
+				"needs_totp": true,
+				"message":    "AngelOne not configured. Set ANGELONE_CLIENT_ID and ANGELONE_API_KEY env vars.",
+			})
+			return
+		}
+		// If credentials not yet provided, prompt the frontend to show the TOTP modal
+		if req.ClientID == "" || req.Password == "" || req.TOTP == "" {
+			c.JSON(http.StatusOK, gin.H{
+				"configured": true,
+				"needs_totp": true,
+				"message":    "Provide your Angel One Client ID, PIN, and TOTP to connect.",
+			})
+			return
+		}
+		// Perform direct TOTP login
+		jwtToken, feedToken, expiresAt, err := loginAngelOne(req.ClientID, req.Password, req.TOTP, cfg.APIKey)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "ANGELONE_LOGIN_FAILED", "message": err.Error()})
+			return
+		}
+		// Upsert connection
+		var conn models.BrokerConnection
+		database.DB.Where("user_id = ? AND broker_name = ?", userID, "angelone").First(&conn)
+		conn.UserID = userID
+		conn.BrokerName = "angelone"
+		conn.DisplayName = "AngelOne SmartAPI"
+		conn.AccessToken = jwtToken
+		conn.FeedToken = feedToken
+		conn.ExternalUserID = req.ClientID
+		conn.TokenExpiresAt = expiresAt
+		conn.Status = "connected"
+		if conn.ID == uuid.Nil {
+			conn.ID = uuid.New()
+			database.DB.Create(&conn)
+		} else {
+			database.DB.Save(&conn)
+		}
+		database.DB.Where("user_id = ?", userID).Delete(&models.AnalyticsCache{})
+		c.JSON(http.StatusOK, gin.H{"connected": true, "connection": conn})
 		return
 	}
 
@@ -641,6 +692,63 @@ func exchangeFyers(cfg brokerConfig, code string) (string, string, *time.Time, e
 }
 
 // ─────────────────────────────────────────────────────────
+// ANGELONE — TOTP DIRECT LOGIN
+// ─────────────────────────────────────────────────────────
+
+// loginAngelOne calls SmartAPI POST /rest/auth/angelbroking/user/v1/loginByPassword
+// and returns jwtToken, feedToken, and expiry (5 AM IST next day per SmartAPI docs).
+func loginAngelOne(clientCode, password, totp, apiKey string) (jwtToken, feedToken string, expiresAt *time.Time, err error) {
+	payload := map[string]string{
+		"clientcode": clientCode,
+		"password":   password,
+		"totp":       totp,
+	}
+	body, _ := json.Marshal(payload)
+
+	req, _ := http.NewRequest("POST",
+		"https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword",
+		bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-UserType", "USER")
+	req.Header.Set("X-SourceID", "WEB")
+	req.Header.Set("X-ClientLocalIP", "127.0.0.1")
+	req.Header.Set("X-ClientPublicIP", "127.0.0.1")
+	req.Header.Set("X-MACAddress", "00:00:00:00:00:00")
+	req.Header.Set("X-PrivateKey", apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", nil, fmt.Errorf("angelone: http error: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+
+	var result struct {
+		Status  bool   `json:"status"`
+		Message string `json:"message"`
+		Data    struct {
+			JwtToken     string `json:"jwtToken"`
+			RefreshToken string `json:"refreshToken"`
+			FeedToken    string `json:"feedToken"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", "", nil, fmt.Errorf("angelone: decode error: %w", err)
+	}
+	if !result.Status || result.Data.JwtToken == "" {
+		return "", "", nil, fmt.Errorf("angelone login failed: %s", result.Message)
+	}
+
+	// Tokens expire at 5:00 AM IST the next day
+	ist, _ := time.LoadLocation("Asia/Kolkata")
+	tomorrow := time.Now().In(ist).AddDate(0, 0, 1)
+	exp := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 5, 0, 0, 0, ist).UTC()
+
+	return result.Data.JwtToken, result.Data.FeedToken, &exp, nil
+}
+
+// ─────────────────────────────────────────────────────────
 // BROKER TRADE FETCHING
 // ─────────────────────────────────────────────────────────
 
@@ -650,10 +758,147 @@ func fetchBrokerTrades(conn models.BrokerConnection, cfg brokerConfig, userID uu
 		return fetchZerodhaTrades(conn, cfg, userID)
 	case "upstox":
 		return fetchUpstoxTrades(conn, cfg, userID)
+	case "angelone":
+		return fetchAngelOneTrades(conn, cfg, userID)
 	case "dhan":
 		return fetchDhanTrades(conn, cfg, userID)
 	}
 	return nil, fmt.Errorf("no trade fetcher for broker: %s", conn.BrokerName)
+}
+
+func fetchAngelOneTrades(conn models.BrokerConnection, cfg brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
+	req, _ := http.NewRequest("GET",
+		"https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/getTradeBook",
+		nil)
+	req.Header.Set("Authorization", "Bearer "+conn.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-UserType", "USER")
+	req.Header.Set("X-SourceID", "WEB")
+	req.Header.Set("X-ClientLocalIP", "127.0.0.1")
+	req.Header.Set("X-ClientPublicIP", "127.0.0.1")
+	req.Header.Set("X-MACAddress", "00:00:00:00:00:00")
+	req.Header.Set("X-PrivateKey", cfg.APIKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("angelone: http error: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("angelone: token expired (HTTP 401) — please reconnect")
+	}
+
+	var result struct {
+		Status  bool   `json:"status"`
+		Message string `json:"message"`
+		Data    []struct {
+			OrderID          string  `json:"orderid"`
+			UniqueOrderID    string  `json:"uniqueorderid"`
+			TradingSymbol    string  `json:"tradingsymbol"`
+			SymbolToken      string  `json:"symboltoken"`
+			Exchange         string  `json:"exchange"`       // NSE / BSE / NFO / MCX
+			ProductType      string  `json:"producttype"`    // INTRADAY / DELIVERY / CARRYFORWARD / MARGIN
+			TransactionType  string  `json:"transactiontype"` // BUY / SELL
+			Quantity         int     `json:"quantity"`
+			FillQty          int     `json:"fillid"`
+			Price            float64 `json:"price"`
+			AveragePrice     float64 `json:"averageprice"`
+			TradeID          string  `json:"tradeID"`
+			OrderTimestamp   string  `json:"updatetime"` // "02-Jan-2006 15:04:05"
+			OptionType       string  `json:"optiontype"` // CE / PE / ""
+			StrikePrice      float64 `json:"strikeprice"`
+			ExpiryDate       string  `json:"expirydate"` // "25Jan2024"
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("angelone: decode error: %w", err)
+	}
+	if !result.Status {
+		return nil, fmt.Errorf("angelone: API error: %s", result.Message)
+	}
+
+	connID := conn.ID
+	trades := make([]models.Trade, 0, len(result.Data))
+	for _, t := range result.Data {
+		tradeTime, _ := time.Parse("02-Jan-2006 15:04:05", t.OrderTimestamp)
+		if tradeTime.IsZero() {
+			tradeTime = time.Now()
+		}
+
+		segment := classifyAngelOneSegment(t.Exchange, t.ProductType)
+		instrumentType := classifyAngelOneInstrumentType(t.Exchange, t.OptionType)
+
+		instrument := t.TradingSymbol
+		if t.StrikePrice > 0 && t.OptionType != "" {
+			instrument = fmt.Sprintf("%s %s %.0f%s", t.TradingSymbol, t.ExpiryDate, t.StrikePrice, t.OptionType)
+		}
+
+		qty := t.Quantity
+		if t.FillQty > 0 {
+			qty = t.FillQty
+		}
+
+		tradeID := t.TradeID
+		if tradeID == "" {
+			tradeID = t.UniqueOrderID
+		}
+		if tradeID == "" {
+			tradeID = t.OrderID
+		}
+
+		rawJSON, _ := json.Marshal(t)
+		trades = append(trades, models.Trade{
+			ID:                 uuid.New(),
+			UserID:             userID,
+			BrokerConnectionID: &connID,
+			BrokerTradeID:      tradeID,
+			TradeDate:          tradeTime,
+			EntryTime:          tradeTime,
+			Instrument:         instrument,
+			InstrumentType:     instrumentType,
+			Segment:            segment,
+			Direction:          t.TransactionType,
+			EntryPrice:         t.AveragePrice,
+			Quantity:           qty,
+			Source:             "angelone",
+			RawData:            datatypes.JSON(rawJSON),
+		})
+	}
+	return trades, nil
+}
+
+func classifyAngelOneSegment(exchange, productType string) string {
+	ex := strings.ToUpper(exchange)
+	switch ex {
+	case "NFO", "BFO":
+		return "FNO"
+	case "MCX":
+		return "COMM"
+	case "CDS", "BCD":
+		return "CURR"
+	}
+	if strings.ToUpper(productType) == "INTRADAY" {
+		return "EQ_INTRADAY"
+	}
+	return "EQ"
+}
+
+func classifyAngelOneInstrumentType(exchange, optionType string) string {
+	ex := strings.ToUpper(exchange)
+	if ex == "NFO" || ex == "BFO" {
+		switch strings.ToUpper(optionType) {
+		case "CE":
+			return "CE"
+		case "PE":
+			return "PE"
+		default:
+			return "FUT"
+		}
+	}
+	return "EQ"
 }
 
 func fetchZerodhaTrades(conn models.BrokerConnection, cfg brokerConfig, userID uuid.UUID) ([]models.Trade, error) {

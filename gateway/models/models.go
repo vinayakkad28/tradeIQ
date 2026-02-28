@@ -29,6 +29,7 @@ type BrokerConnection struct {
 	UserID         uuid.UUID  `gorm:"index;not null" json:"user_id"`
 	BrokerName     string     `gorm:"not null" json:"broker_name"`
 	DisplayName    string     `json:"display_name"`
+	ExternalUserID string     `json:"external_user_id,omitempty"` // client ID at the broker (e.g. Angel One client code)
 	AccessToken    string     `json:"-"`
 	RefreshToken   string     `json:"-"`
 	FeedToken      string     `json:"-"`
