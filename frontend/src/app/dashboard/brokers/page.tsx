@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { brokerAPI } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
@@ -21,9 +21,43 @@ type Connection = {
   trade_count: number
 }
 
+// Separate component so useSearchParams() is inside a Suspense boundary
+function OAuthCallbackHandler({ onMessage, onRefresh, isAuthenticated }: {
+  onMessage: (msg: string) => void
+  onRefresh: () => void
+  isAuthenticated: boolean
+}) {
+  const searchParams = useSearchParams()
+
+  useEffect(() => {
+    const code = searchParams.get('code')
+    const state = searchParams.get('state')
+    const broker = searchParams.get('broker')
+    const error = searchParams.get('error')
+
+    if (error) {
+      onMessage(`OAuth failed: ${error}. Please try again.`)
+      return
+    }
+
+    if (code && state && broker && isAuthenticated) {
+      brokerAPI.callback(broker, code, state)
+        .then(() => {
+          onMessage(`${broker} connected successfully! Fetching your trades...`)
+          onRefresh()
+        })
+        .catch(err => {
+          onMessage(err?.response?.data?.message || 'OAuth token exchange failed. Please try again.')
+        })
+      window.history.replaceState({}, '', '/dashboard/brokers')
+    }
+  }, [isAuthenticated]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return null
+}
+
 export default function BrokersPage() {
   const { isAuthenticated } = useAuth()
-  const searchParams = useSearchParams()
   const [connections, setConnections] = useState<Connection[]>([])
   const [connecting, setConnecting] = useState<string | null>(null)
   const [syncing, setSyncing] = useState<string | null>(null)
@@ -43,35 +77,10 @@ export default function BrokersPage() {
     }
   }
 
-  // Handle OAuth callback: broker redirected back with code+state+broker
-  useEffect(() => {
-    const code = searchParams.get('code')
-    const state = searchParams.get('state')
-    const broker = searchParams.get('broker')
-    const error = searchParams.get('error')
-
-    if (error) {
-      setSyncMessage(`OAuth failed: ${error}. Please try again.`)
-      setTimeout(() => setSyncMessage(null), 5000)
-      return
-    }
-
-    if (code && state && broker && isAuthenticated) {
-      // Exchange code for token via backend
-      brokerAPI.callback(broker, code, state)
-        .then(() => {
-          setSyncMessage(`${broker} connected successfully! Fetching your trades...`)
-          fetchConnections()
-          setTimeout(() => setSyncMessage(null), 5000)
-        })
-        .catch(err => {
-          setSyncMessage(err?.response?.data?.message || 'OAuth token exchange failed. Please try again.')
-          setTimeout(() => setSyncMessage(null), 5000)
-        })
-      // Clean URL
-      window.history.replaceState({}, '', '/dashboard/brokers')
-    }
-  }, [isAuthenticated]) // eslint-disable-line react-hooks/exhaustive-deps
+  const handleOAuthMessage = (msg: string) => {
+    setSyncMessage(msg)
+    setTimeout(() => setSyncMessage(null), 5000)
+  }
 
   useEffect(() => { fetchConnections() }, [isAuthenticated]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -125,6 +134,15 @@ export default function BrokersPage() {
 
   return (
     <div className="page-enter" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+
+      {/* OAuth callback handler — must be inside Suspense for useSearchParams */}
+      <Suspense fallback={null}>
+        <OAuthCallbackHandler
+          onMessage={handleOAuthMessage}
+          onRefresh={fetchConnections}
+          isAuthenticated={isAuthenticated}
+        />
+      </Suspense>
 
       {/* Connected Accounts */}
       <div>
