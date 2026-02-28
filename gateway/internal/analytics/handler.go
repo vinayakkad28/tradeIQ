@@ -102,7 +102,7 @@ func GetEquityCurve(c *gin.Context) {
 	}
 	sort.Strings(dates)
 
-	var points []Point
+	points := make([]Point, 0)
 	cum := 0.0
 	for _, date := range dates {
 		daily := dailyMap[date]
@@ -148,7 +148,7 @@ func GetHeatmap(c *gin.Context) {
 		cellMap[key].Trades++
 	}
 
-	var cells []Cell
+	cells := make([]Cell, 0)
 	for _, cell := range cellMap {
 		if cell.Trades > 0 {
 			cell.AvgPnL = cell.PnL / float64(cell.Trades)
@@ -387,7 +387,7 @@ func computeFullInsights(trades []models.Trade) FullInsightReport {
 	byDate := groupByDate(trades)
 	sortedDates := sortedDateKeys(byDate)
 	cumulative, peak, maxDrawdown := 0.0, 0.0, 0.0
-	var equityCurve []EquityPoint
+	equityCurve := make([]EquityPoint, 0)
 
 	for _, date := range sortedDates {
 		daily := sumPnL(byDate[date])
