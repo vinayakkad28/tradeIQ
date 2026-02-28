@@ -199,7 +199,7 @@ func ConnectBroker(c *gin.Context) {
 	})
 }
 
-// validateDhanToken calls GET /v2/profile to confirm token is valid
+// validateDhanToken calls GET /v2/profile to confirm token is valid.
 // Returns the dhanClientId on success.
 func validateDhanToken(token string) (string, error) {
 	req, _ := http.NewRequest("GET", "https://api.dhan.co/v2/profile", nil)
@@ -210,21 +210,27 @@ func validateDhanToken(token string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
 
-	if resp.StatusCode == http.StatusUnauthorized {
-		return "", fmt.Errorf("token rejected by Dhan (HTTP 401)")
+	// Dhan returns 400 (DH-906) for invalid tokens, 401 for expired ones.
+	// Any non-200 response means the token is unusable.
+	if resp.StatusCode != http.StatusOK {
+		var dhanErr struct {
+			ErrorCode    string `json:"errorCode"`
+			ErrorMessage string `json:"errorMessage"`
+		}
+		if jsonErr := json.Unmarshal(body, &dhanErr); jsonErr == nil && dhanErr.ErrorMessage != "" {
+			return "", fmt.Errorf("%s (%s)", dhanErr.ErrorMessage, dhanErr.ErrorCode)
+		}
+		return "", fmt.Errorf("Dhan API returned HTTP %d — token may be invalid or expired", resp.StatusCode)
 	}
 
 	var profile struct {
 		DhanClientID string `json:"dhanClientId"`
 		ClientName   string `json:"clientName"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&profile); err != nil {
-		// Non-fatal — token might still be valid even if profile parsing fails
-		return "unknown", nil
-	}
-	if profile.DhanClientID == "" {
+	if err := json.Unmarshal(body, &profile); err != nil || profile.DhanClientID == "" {
 		return "unknown", nil
 	}
 	return profile.DhanClientID, nil
