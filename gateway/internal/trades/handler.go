@@ -62,7 +62,11 @@ func detectBroker(headers map[string]int) string {
 	if _, ok := headers["instrument_token"]; ok {
 		return "upstox"
 	}
+	// AngelOne exports "Scrip Name" (with space) or "ScripName" (no space)
 	if _, ok := headers["scripname"]; ok {
+		return "angelone"
+	}
+	if _, ok := headers["scrip name"]; ok {
 		return "angelone"
 	}
 	if _, ok := headers["tradevalue"]; ok {
@@ -84,13 +88,20 @@ func parseRow(row []string, headers map[string]int, userID uuid.UUID, broker str
 	}
 
 	// ── Date ──
-	dateStr := get("date")
-	if dateStr == "" {
-		dateStr = get("trade_date")
-	}
-	tradeDate, err := time.Parse("2006-01-02", dateStr)
-	if err != nil {
-		for _, layout := range []string{"02-01-2006", "01/02/2006", "2/1/2006"} {
+	// AngelOne exports "Trade Date" or "Order Date"; try multiple column names + formats
+	dateStr := firstOf(get("date"), get("trade_date"), get("trade date"), get("order date"),
+		get("orderdate"), get("tradedate"))
+	tradeDate, _ := time.Parse("2006-01-02", dateStr)
+	if tradeDate.IsZero() {
+		// Try all common Indian broker date formats including AngelOne's "02-Jan-2006"
+		for _, layout := range []string{
+			"02-Jan-2006", "02-January-2006",
+			"02-01-2006", "2-1-2006",
+			"01/02/2006", "2/1/2006",
+			"02/01/2006", "1/2/2006",
+			"02 Jan 2006", "02 January 2006",
+			"Jan 02, 2006", "January 02, 2006",
+		} {
 			if t, e := time.Parse(layout, dateStr); e == nil {
 				tradeDate = t
 				break
@@ -99,39 +110,44 @@ func parseRow(row []string, headers map[string]int, userID uuid.UUID, broker str
 	}
 
 	// ── Instrument ──
-	instrument := get("instrument")
-	if instrument == "" {
-		instrument = get("tradingsymbol")
-	}
-	if instrument == "" {
-		instrument = get("scripname")
-	}
-	if instrument == "" {
-		instrument = get("symbol")
-	}
+	// AngelOne: "Scrip Name" (spaced) or "ScripName" or "Symbol Name"
+	instrument := firstOf(get("instrument"), get("tradingsymbol"),
+		get("scripname"), get("scrip name"), get("symbol name"), get("symbol"))
 	if instrument == "" {
 		return nil, fmt.Errorf("no instrument in row")
 	}
 
 	// ── Direction ──
-	direction := strings.ToUpper(get("direction"))
-	if direction == "" {
-		direction = strings.ToUpper(get("transaction_type"))
-	}
-	if direction == "" {
-		direction = strings.ToUpper(get("trade_type"))
-	}
-	if direction == "" {
-		direction = strings.ToUpper(get("buy_sell"))
+	// AngelOne exports "Buy/Sell" column
+	dirRaw := firstOf(get("direction"), get("transaction_type"), get("trade_type"),
+		get("buy_sell"), get("buy/sell"), get("action"), get("order_type"))
+	direction := strings.ToUpper(strings.TrimSpace(dirRaw))
+	// Normalise: "B"/"BUY"/"PURCHASE" → "BUY", "S"/"SELL" → "SELL"
+	if direction == "B" || strings.HasPrefix(direction, "BUY") || direction == "PURCHASE" {
+		direction = "BUY"
+	} else if direction == "S" || strings.HasPrefix(direction, "SELL") {
+		direction = "SELL"
 	}
 	if direction != "BUY" && direction != "SELL" {
-		direction = "BUY" // fallback
+		direction = "BUY" // last resort
 	}
 
 	// ── Segment ──
-	segment := strings.ToUpper(get("segment"))
+	// AngelOne exports "Exchange" (NSE/NFO/BSE/MCX) and "Segment" separately
+	segment := strings.ToUpper(firstOf(get("segment"), get("exchange_segment")))
 	if segment == "" {
-		segment = strings.ToUpper(get("exchange_segment"))
+		// Map AngelOne exchange codes to our segment names
+		exchange := strings.ToUpper(firstOf(get("exchange"), get("exch")))
+		switch exchange {
+		case "NFO", "BFO":
+			segment = "FNO"
+		case "MCX":
+			segment = "COMM"
+		case "CDS", "BCD":
+			segment = "CURR"
+		case "NSE", "BSE":
+			segment = "" // fall through to instrument-based detection
+		}
 	}
 	if segment == "" {
 		// Infer from instrument name: if it contains CE/PE/FUT it's FNO
@@ -147,17 +163,27 @@ func parseRow(row []string, headers map[string]int, userID uuid.UUID, broker str
 	}
 
 	// ── Prices ──
-	entryPrice, _ := strconv.ParseFloat(firstOf(get("entry_price"), get("average_price"), get("tradeprice"), get("buy_price"), get("price")), 64)
-	exitPrice, _ := strconv.ParseFloat(firstOf(get("exit_price"), get("sell_price"), get("exit_avg_price")), 64)
+	// AngelOne: "Trade Price" / "Traded Price" / "Net Rate"
+	entryPrice, _ := strconv.ParseFloat(strings.ReplaceAll(
+		firstOf(get("entry_price"), get("average_price"), get("tradeprice"),
+			get("trade price"), get("traded price"), get("net rate"),
+			get("buy_price"), get("price"), get("order price")), ",", ""), 64)
+	exitPrice, _ := strconv.ParseFloat(strings.ReplaceAll(
+		firstOf(get("exit_price"), get("sell_price"), get("exit_avg_price")), ",", ""), 64)
 
 	// ── Quantity ──
-	qty, _ := strconv.Atoi(firstOf(get("quantity"), get("traded_quantity"), get("qty"), get("filled_quantity")))
+	// AngelOne: "Quantity" or "Traded Qty"
+	qty, _ := strconv.Atoi(strings.ReplaceAll(
+		firstOf(get("quantity"), get("traded_quantity"), get("traded qty"),
+			get("qty"), get("filled_quantity")), ",", ""))
 	if qty == 0 {
 		qty = 1
 	}
 
 	// ── P&L ──
-	pnlStr := firstOf(get("pnl"), get("profit_loss"), get("realized_pnl"), get("net_pnl"))
+	// AngelOne: "Net Amount" = turnover (not P&L), so only use named P&L columns
+	pnlStr := strings.ReplaceAll(
+		firstOf(get("pnl"), get("profit_loss"), get("realized_pnl"), get("net_pnl")), ",", "")
 	pnl, _ := strconv.ParseFloat(pnlStr, 64)
 
 	// Compute P&L from entry/exit if not provided but both prices exist
@@ -170,7 +196,9 @@ func parseRow(row []string, headers map[string]int, userID uuid.UUID, broker str
 	}
 
 	// ── Charges ──
-	charges, _ := strconv.ParseFloat(firstOf(get("charges"), get("brokerage"), get("total_charges")), 64)
+	// AngelOne exports "Brokerage" column
+	charges, _ := strconv.ParseFloat(strings.ReplaceAll(
+		firstOf(get("charges"), get("brokerage"), get("total_charges"), get("total charges")), ",", ""), 64)
 
 	// ── Holding time ──
 	holdingMins := 0
