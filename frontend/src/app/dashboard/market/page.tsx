@@ -3,9 +3,21 @@ import { useState, useEffect, useCallback } from 'react'
 
 const MARKET_BASE = process.env.NEXT_PUBLIC_API_URL?.replace('/api/v1', '') || 'http://localhost:8080'
 
+function getToken() {
+  try { return localStorage.getItem('access_token') || '' } catch { return '' }
+}
+
 async function fetchMarket(path: string) {
   const res = await fetch(`${MARKET_BASE}/api/v1/market${path}`)
   return res.json()
+}
+
+async function fetchMarketAuth(path: string) {
+  const token = getToken()
+  const res = await fetch(`${MARKET_BASE}/api/v1/market${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  return res
 }
 
 type IndexData = {
@@ -39,8 +51,9 @@ export default function MarketPage() {
   const [selectedSymbol, setSelectedSymbol] = useState('NIFTY')
   const [loading, setLoading] = useState(true)
   const [optLoading, setOptLoading] = useState(false)
-  const [gainers, setGainers] = useState<{ symbol: string; ltp: number; pChange: number }[]>([])
-  const [losers, setLosers] = useState<{ symbol: string; ltp: number; pChange: number }[]>([])
+  const [optError, setOptError] = useState(false)
+  const [gainers, setGainers] = useState<{ symbol: string; last: number; change_pct: number }[]>([])
+  const [losers, setLosers] = useState<{ symbol: string; last: number; change_pct: number }[]>([])
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
   const loadIndices = useCallback(async () => {
@@ -66,9 +79,13 @@ export default function MarketPage() {
 
   const loadOptionChain = useCallback(async (symbol: string, expiry?: string) => {
     setOptLoading(true)
+    setOptError(false)
     try {
       const path = `/option-chain?symbol=${symbol}${expiry ? `&expiry=${encodeURIComponent(expiry)}` : ''}`
-      const data = await fetchMarket(path)
+      const res = await fetchMarketAuth(path)
+      if (!res.ok) { setOptError(true); return }
+      const data = await res.json()
+      if (data.error) { setOptError(true); return }
       setOptionChain(data.data ?? [])
       setExpiries(data.expiry_dates ?? [])
       setUnderlying(data.underlying ?? 0)
@@ -77,7 +94,7 @@ export default function MarketPage() {
         setSelectedExpiry(data.expiry_dates[0])
       }
     } catch {
-      setOptionChain([])
+      setOptError(true)
     } finally {
       setOptLoading(false)
     }
@@ -120,12 +137,12 @@ export default function MarketPage() {
             <div className="data-label">INDIA VIX</div>
             <div style={{
               fontFamily: 'var(--font-mono)', fontSize: '1.4rem', fontWeight: 800,
-              color: vix.vix > 20 ? 'var(--color-negative)' : vix.vix > 15 ? 'var(--color-amber-primary)' : 'var(--color-positive)',
+              color: (vix.vix ?? 0) > 20 ? 'var(--color-negative)' : (vix.vix ?? 0) > 15 ? 'var(--color-amber-primary)' : 'var(--color-positive)',
             }}>
-              {vix.vix.toFixed(2)}
+              {(vix.vix ?? 0).toFixed(2)}
             </div>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: vix.change >= 0 ? 'var(--color-positive)' : 'var(--color-negative)' }}>
-              {vix.change >= 0 ? '+' : ''}{vix.change.toFixed(2)} ({vix.percent_change.toFixed(2)}%)
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: (vix.change ?? 0) >= 0 ? 'var(--color-positive)' : 'var(--color-negative)' }}>
+              {(vix.change ?? 0) >= 0 ? '+' : ''}{(vix.change ?? 0).toFixed(2)} ({(vix.percent_change ?? 0).toFixed(2)}%)
             </div>
           </div>
         )}
@@ -139,16 +156,18 @@ export default function MarketPage() {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
           {indices.filter(i => i.index !== 'INDIA VIX').map(idx => {
-            const pos = idx.change >= 0
+            const chg = idx.change ?? 0
+            const pchg = idx.percentChange ?? 0
+            const pos = chg >= 0
             return (
               <div key={idx.index} className="terminal-card" style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
                 <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--color-text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>{idx.index}</div>
                 <div style={{ fontFamily: 'var(--font-mono)', fontSize: '1.2rem', fontWeight: 800, color: 'var(--color-text-primary)' }}>
-                  {idx.last.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                  {(idx.last ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: pos ? 'var(--color-positive)' : 'var(--color-negative)', fontWeight: 700 }}>
-                    {pos ? '▲' : '▼'} {pos ? '+' : ''}{idx.change.toFixed(2)} ({pos ? '+' : ''}{idx.percentChange.toFixed(2)}%)
+                    {pos ? '▲' : '▼'} {pos ? '+' : ''}{chg.toFixed(2)} ({pos ? '+' : ''}{pchg.toFixed(2)}%)
                   </span>
                 </div>
                 <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.25rem' }}>
@@ -190,13 +209,13 @@ export default function MarketPage() {
             <div key={title} className="terminal-card">
               <div className="section-header"><span className="section-header-text">{title}</span></div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-                {data.slice(0, 5).map((s: { symbol: string; ltp: number; pChange: number }) => (
+                {data.slice(0, 5).map((s: { symbol: string; last: number; change_pct: number }) => (
                   <div key={s.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.3rem 0', borderBottom: '1px solid var(--color-border)' }}>
                     <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>{s.symbol}</span>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{s.ltp?.toLocaleString('en-IN')}</div>
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>{(s.last ?? 0).toLocaleString('en-IN')}</div>
                       <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: pos ? 'var(--color-positive)' : 'var(--color-negative)' }}>
-                        {pos ? '+' : ''}{s.pChange?.toFixed(2)}%
+                        {pos ? '+' : ''}{(s.change_pct ?? 0).toFixed(2)}%
                       </div>
                     </div>
                   </div>
@@ -236,6 +255,11 @@ export default function MarketPage() {
 
         {optLoading ? (
           <div style={{ padding: '2rem', textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>Loading option chain...</div>
+        ) : optError ? (
+          <div style={{ padding: '2rem', textAlign: 'center', background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.12)', borderRadius: 4 }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--color-amber-primary)', marginBottom: '0.3rem' }}>Option Chain Requires Dhan</div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>Connect your Dhan account in <a href="/dashboard/brokers" style={{ color: 'var(--color-amber-primary)' }}>Brokers</a> to get live option chain with greeks and OI.</div>
+          </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="terminal-table" style={{ fontSize: '0.72rem' }}>

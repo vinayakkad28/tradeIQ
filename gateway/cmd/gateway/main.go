@@ -31,8 +31,15 @@ func main() {
 	}
 	r := gin.New()
 	r.Use(gin.Recovery())
+
+	// Build CORS origins: always include localhost dev + known prod domains.
+	// Add FRONTEND_URL from env so Vercel preview URLs and custom domains work.
+	corsOrigins := []string{"http://localhost:3000", "https://tradeiq.in", "https://www.tradeiq.in"}
+	if fu := os.Getenv("FRONTEND_URL"); fu != "" {
+		corsOrigins = append(corsOrigins, fu)
+	}
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:3000", "https://tradeiq.in"},
+		AllowOrigins:     corsOrigins,
 		AllowMethods:     []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Authorization", "Content-Type"},
 		AllowCredentials: true,
@@ -52,7 +59,6 @@ func main() {
 	{
 		mkt.GET("/indices", market.GetIndices)
 		mkt.GET("/vix", market.GetVIX)
-		mkt.GET("/option-chain", market.GetOptionChain)
 		mkt.GET("/fii-dii", market.GetFIIDII)
 		mkt.GET("/gainers-losers", market.GetGainersLosers)
 		mkt.GET("/max-pain", market.GetMaxPain)
@@ -96,9 +102,11 @@ func main() {
 		protected.GET("analytics/equity-curve", analytics.GetEquityCurve)
 		protected.GET("analytics/heatmap", analytics.GetHeatmap)
 
-		// Journal (trader plan)
+		// Market — authenticated (uses user's Dhan connection for option chain)
+		protected.GET("market/option-chain", market.GetOptionChain)
+
+		// Journal (free for all authenticated users)
 		journalGroup := protected.Group("journal")
-		journalGroup.Use(middleware.PlanGate("trader"))
 		{
 			journalGroup.GET("", journal.ListJournal)
 			journalGroup.POST("", journal.CreateJournalEntry)

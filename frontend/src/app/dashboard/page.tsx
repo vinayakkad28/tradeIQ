@@ -1,4 +1,5 @@
 'use client'
+import Link from 'next/link'
 import { useDateRange } from '@/context/DateRangeContext'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -10,16 +11,66 @@ function fmt(n: number) {
 }
 
 export default function DashboardOverview() {
-  const { insights } = useDateRange()
+  const { insights, hasRealData } = useDateRange()
   const { totalPnl, winRate, expectancy, profitFactor, totalTrades, wins, losses,
     avgWin, avgLoss, maxDrawdown, maxDrawdownPct, equityCurve, primaryInsight,
     iqScore, iqBreakdown, revengeTradeCount, stopLossMovedCount,
     planComplianceRate, boredomTradeCount, mostExpensiveDays, weeklyTrend } = insights
 
   const pnlPos = totalPnl >= 0
+  const isNewUser = !hasRealData
 
   return (
     <div className="page-enter" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+
+      {/* Getting Started — shown when user has no real trade data */}
+      {isNewUser && (
+        <div style={{
+          background: 'linear-gradient(135deg, rgba(109,43,255,0.12) 0%, rgba(0,214,143,0.06) 100%)',
+          border: '1px solid rgba(109,43,255,0.3)',
+          borderRadius: 6,
+          padding: '2rem',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '2rem', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 280 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', marginBottom: '0.75rem' }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '1.5rem' }}>⚡</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: '1rem', fontWeight: 800, color: 'var(--color-text-primary)' }}>
+                  Welcome to TradeIQ
+                </span>
+              </div>
+              <p style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', lineHeight: 1.6, marginBottom: '1.25rem', maxWidth: 520 }}>
+                You&apos;re seeing demo analytics. Connect your broker or upload a trade CSV to unlock real insights — win rate, P&amp;L breakdown, behavioral patterns, and your personalised TradeIQ Score.
+              </p>
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <Link href="/dashboard/brokers" className="btn-primary" style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                  ⟳ Connect Broker
+                </Link>
+                <Link href="/dashboard/upload" className="btn-ghost" style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+                  ↑ Upload CSV
+                </Link>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.625rem', minWidth: 240 }}>
+              {[
+                { icon: '📊', label: 'Real P&L Analytics', desc: 'Accurate entry/exit tracking' },
+                { icon: '🧠', label: 'Behavioural Flags', desc: 'Revenge trades, SL-moving, more' },
+                { icon: '📅', label: 'Daily Sync', desc: 'Auto-import every morning at 6 AM' },
+                { icon: '📓', label: 'Trade Journal', desc: 'Tag emotions, setups, notes' },
+              ].map(f => (
+                <div key={f.label} style={{ background: 'rgba(0,0,0,0.25)', borderRadius: 4, padding: '0.625rem 0.75rem' }}>
+                  <div style={{ fontSize: '1rem', marginBottom: '0.2rem' }}>{f.icon}</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>{f.label}</div>
+                  <div style={{ fontSize: '0.68rem', color: 'var(--color-text-muted)', marginTop: '0.15rem', lineHeight: 1.4 }}>{f.desc}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginTop: '1rem', fontFamily: 'var(--font-mono)', fontSize: '0.68rem', color: 'var(--color-text-muted)', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.75rem' }}>
+            DEMO MODE — analytics below are simulated · Connect a broker to see your actual performance
+          </div>
+        </div>
+      )}
 
       {/* Primary Alert */}
       {primaryInsight && (

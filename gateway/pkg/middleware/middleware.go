@@ -18,13 +18,19 @@ import (
 
 func AuthRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": true, "code": "NO_TOKEN", "message": "Authorization token required"})
-			c.Abort()
-			return
+		// Support ?token= query param for WebSocket connections (browsers can't set headers on WS)
+		var tokenStr string
+		if q := c.Query("token"); q != "" {
+			tokenStr = q
+		} else {
+			authHeader := c.GetHeader("Authorization")
+			if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": true, "code": "NO_TOKEN", "message": "Authorization token required"})
+				c.Abort()
+				return
+			}
+			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
 		}
-		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 		secret := os.Getenv("JWT_SECRET")
 		if secret == "" {
 			secret = "tradeiq_dev_secret_change_in_production"

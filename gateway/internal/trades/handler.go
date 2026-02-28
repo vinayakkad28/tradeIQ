@@ -2,6 +2,7 @@ package trades
 
 import (
 	"encoding/csv"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -82,63 +83,182 @@ func parseRow(row []string, headers map[string]int, userID uuid.UUID, broker str
 		return strings.TrimSpace(row[idx])
 	}
 
+	// ── Date ──
 	dateStr := get("date")
 	if dateStr == "" {
 		dateStr = get("trade_date")
 	}
 	tradeDate, err := time.Parse("2006-01-02", dateStr)
 	if err != nil {
-		tradeDate = time.Now()
+		for _, layout := range []string{"02-01-2006", "01/02/2006", "2/1/2006"} {
+			if t, e := time.Parse(layout, dateStr); e == nil {
+				tradeDate = t
+				break
+			}
+		}
 	}
 
+	// ── Instrument ──
 	instrument := get("instrument")
 	if instrument == "" {
 		instrument = get("tradingsymbol")
-		if instrument == "" {
-			instrument = get("scripname")
-		}
-		if instrument == "" {
-			instrument = get("symbol")
-		}
 	}
 	if instrument == "" {
-		return nil, err
+		instrument = get("scripname")
+	}
+	if instrument == "" {
+		instrument = get("symbol")
+	}
+	if instrument == "" {
+		return nil, fmt.Errorf("no instrument in row")
 	}
 
-	pnlStr := get("pnl")
+	// ── Direction ──
+	direction := strings.ToUpper(get("direction"))
+	if direction == "" {
+		direction = strings.ToUpper(get("transaction_type"))
+	}
+	if direction == "" {
+		direction = strings.ToUpper(get("trade_type"))
+	}
+	if direction == "" {
+		direction = strings.ToUpper(get("buy_sell"))
+	}
+	if direction != "BUY" && direction != "SELL" {
+		direction = "BUY" // fallback
+	}
+
+	// ── Segment ──
+	segment := strings.ToUpper(get("segment"))
+	if segment == "" {
+		segment = strings.ToUpper(get("exchange_segment"))
+	}
+	if segment == "" {
+		// Infer from instrument name: if it contains CE/PE/FUT it's FNO
+		upper := strings.ToUpper(instrument)
+		if strings.HasSuffix(upper, "CE") || strings.HasSuffix(upper, "PE") ||
+			strings.Contains(upper, "FUT") || strings.Contains(upper, "FUTURES") {
+			segment = "FNO"
+		} else if strings.ToUpper(get("product")) == "MIS" || strings.ToUpper(get("product_type")) == "INTRADAY" {
+			segment = "EQ_INTRADAY"
+		} else {
+			segment = "EQ"
+		}
+	}
+
+	// ── Prices ──
+	entryPrice, _ := strconv.ParseFloat(firstOf(get("entry_price"), get("average_price"), get("tradeprice"), get("buy_price"), get("price")), 64)
+	exitPrice, _ := strconv.ParseFloat(firstOf(get("exit_price"), get("sell_price"), get("exit_avg_price")), 64)
+
+	// ── Quantity ──
+	qty, _ := strconv.Atoi(firstOf(get("quantity"), get("traded_quantity"), get("qty"), get("filled_quantity")))
+	if qty == 0 {
+		qty = 1
+	}
+
+	// ── P&L ──
+	pnlStr := firstOf(get("pnl"), get("profit_loss"), get("realized_pnl"), get("net_pnl"))
 	pnl, _ := strconv.ParseFloat(pnlStr, 64)
 
-	entryPriceStr := get("entry_price")
-	if entryPriceStr == "" {
-		entryPriceStr = get("average_price")
-		if entryPriceStr == "" {
-			entryPriceStr = get("tradeprice")
+	// Compute P&L from entry/exit if not provided but both prices exist
+	if pnl == 0 && entryPrice > 0 && exitPrice > 0 {
+		if direction == "BUY" {
+			pnl = (exitPrice - entryPrice) * float64(qty)
+		} else {
+			pnl = (entryPrice - exitPrice) * float64(qty)
 		}
 	}
-	entryPrice, _ := strconv.ParseFloat(entryPriceStr, 64)
 
-	qtyStr := get("quantity")
-	if qtyStr == "" {
-		qtyStr = get("traded_quantity")
-		if qtyStr == "" {
-			qtyStr = get("qty")
+	// ── Charges ──
+	charges, _ := strconv.ParseFloat(firstOf(get("charges"), get("brokerage"), get("total_charges")), 64)
+
+	// ── Holding time ──
+	holdingMins := 0
+	if hm := get("holding_minutes"); hm != "" {
+		holdingMins, _ = strconv.Atoi(hm)
+	}
+
+	// ── Optional behavioural fields ──
+	followedPlan := strings.ToLower(get("followed_plan")) == "true" || get("followed_plan") == "1"
+	slMoved := strings.ToLower(get("stop_loss_moved")) == "true" || get("stop_loss_moved") == "1"
+	reentry := strings.ToLower(get("re_entry_after_loss")) == "true" || get("re_entry_after_loss") == "1"
+	emotion := get("emotion")
+	setupRating := get("setup_rating")
+
+	// Status — if exit_price set, trade is closed
+	status := "closed"
+	if exitPrice == 0 && pnl == 0 {
+		status = "open"
+	}
+
+	var exitPricePtr *float64
+	if exitPrice != 0 {
+		exitPricePtr = &exitPrice
+	}
+	var holdingMinsPtr *int
+	if holdingMins != 0 {
+		holdingMinsPtr = &holdingMins
+	}
+
+	t := &models.Trade{
+		ID:               uuid.New(),
+		UserID:           userID,
+		TradeDate:        tradeDate,
+		EntryTime:        tradeDate,
+		Instrument:       instrument,
+		Segment:          segment,
+		Direction:        direction,
+		EntryPrice:       entryPrice,
+		ExitPrice:        exitPricePtr,
+		Quantity:         qty,
+		PnL:              &pnl,
+		Charges:          charges,
+		HoldingMinutes:   holdingMinsPtr,
+		Status:           status,
+		FollowedPlan:     &followedPlan,
+		StopLossMoved:    slMoved,
+		ReEntryAfterLoss: reentry,
+		Emotion:          emotion,
+		SetupRating:      setupRating,
+		Source:           "csv",
+	}
+
+	// InstrumentType: EQ/INTRADAY segments are always EQ stocks
+	if segment == "EQ" || segment == "EQ_INTRADAY" || segment == "COMM" || segment == "CURR" {
+		t.InstrumentType = "EQ"
+	} else {
+		// FNO: infer CE/PE/FUT from instrument name suffix
+		upper := strings.ToUpper(instrument)
+		// Option instruments end with a strike+CE/PE pattern like "NIFTY25DEC24000CE"
+		// Use word-boundary check: suffix must be 2-chars and preceded by a digit
+		if len(upper) > 2 {
+			tail2 := upper[len(upper)-2:]
+			prevChar := upper[len(upper)-3]
+			if tail2 == "CE" && prevChar >= '0' && prevChar <= '9' {
+				t.InstrumentType = "CE"
+			} else if tail2 == "PE" && prevChar >= '0' && prevChar <= '9' {
+				t.InstrumentType = "PE"
+			} else if strings.Contains(upper, "FUT") {
+				t.InstrumentType = "FUT"
+			} else {
+				t.InstrumentType = "EQ"
+			}
+		} else {
+			t.InstrumentType = "EQ"
 		}
 	}
-	qty, _ := strconv.Atoi(qtyStr)
 
-	return &models.Trade{
-		ID:         uuid.New(),
-		UserID:     userID,
-		TradeDate:  tradeDate,
-		EntryTime:  tradeDate,
-		Instrument: instrument,
-		Segment:    "FNO",
-		Direction:  "BUY",
-		EntryPrice: entryPrice,
-		Quantity:   qty,
-		PnL:        &pnl,
-		Source:     "csv",
-	}, nil
+	return t, nil
+}
+
+// firstOf returns the first non-empty string from the provided list.
+func firstOf(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // GET /trades

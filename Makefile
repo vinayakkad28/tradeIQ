@@ -12,7 +12,7 @@ frontend:
 	cd frontend && npm run dev
 
 gateway:
-	cd gateway && go run ./cmd/gateway/main.go
+	@set -a && [ -f .env ] && . ./.env; set +a; cd gateway && go run ./cmd/gateway/main.go
 
 # ── DATABASE ──────────────────────────────────────────────
 db:

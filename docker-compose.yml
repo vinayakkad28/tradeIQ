@@ -55,7 +55,8 @@ services:
       ANGELONE_CLIENT_ID: ${ANGELONE_CLIENT_ID:-}
       ANGELONE_CLIENT_SECRET: ${ANGELONE_CLIENT_SECRET:-}
       DHAN_CLIENT_ID: ${DHAN_CLIENT_ID:-}
-      DHAN_ACCESS_TOKEN: ${DHAN_ACCESS_TOKEN:-}
+      DHAN_APP_ID: ${DHAN_APP_ID:-}
+      DHAN_APP_SECRET: ${DHAN_APP_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy

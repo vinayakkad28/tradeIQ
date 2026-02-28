@@ -1,8 +1,10 @@
 package journal
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"tradeiq/gateway/models"
 	"tradeiq/gateway/pkg/database"
@@ -38,15 +40,36 @@ func ListJournal(c *gin.Context) {
 // POST /journal
 func CreateJournalEntry(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
-	var entry models.JournalEntry
-	if err := c.ShouldBindJSON(&entry); err != nil {
+
+	// Accept raw map so we can handle trade_date as either "YYYY-MM-DD" or RFC3339
+	var raw map[string]json.RawMessage
+	if err := c.ShouldBindJSON(&raw); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "VALIDATION_ERROR", "message": err.Error()})
 		return
 	}
+
+	var entry models.JournalEntry
+	// Marshal back to JSON and re-decode into the model (handles all fields except trade_date)
+	rebind, _ := json.Marshal(raw)
+	json.Unmarshal(rebind, &entry) //nolint
+
+	// Parse trade_date flexibly
+	if tdRaw, ok := raw["trade_date"]; ok {
+		var tdStr string
+		if err := json.Unmarshal(tdRaw, &tdStr); err == nil {
+			for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
+				if t, err := time.Parse(layout, tdStr); err == nil {
+					entry.TradeDate = t
+					break
+				}
+			}
+		}
+	}
+
 	entry.ID = uuid.New()
 	entry.UserID = userID
 	database.DB.Create(&entry)
-	c.JSON(http.StatusCreated, entry)
+	c.JSON(http.StatusCreated, gin.H{"entry": entry})
 }
 
 // PATCH /journal/:id

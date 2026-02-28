@@ -85,6 +85,10 @@ export default function BrokersPage() {
   useEffect(() => { fetchConnections() }, [isAuthenticated]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleConnect = async (brokerId: string) => {
+    if (!isAuthenticated) {
+      window.location.href = '/login'
+      return
+    }
     setConnecting(brokerId)
     try {
       const res = await brokerAPI.connect(brokerId)
