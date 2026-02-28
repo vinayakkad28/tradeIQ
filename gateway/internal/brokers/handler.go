@@ -65,10 +65,10 @@ func getBrokerConfig(broker string) brokerConfig {
 		}
 	case "angelone":
 		return brokerConfig{
-			APIKey:    os.Getenv("ANGELONE_CLIENT_ID"),
-			APISecret: os.Getenv("ANGELONE_CLIENT_SECRET"),
-			OAuthURL:  "", // SmartAPI uses client_id+TOTP, no web OAuth
-			TokenURL:  "https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword",
+			APIKey:      os.Getenv("ANGELONE_API_KEY"), // Publisher API key (from SmartAPI "Publisher APIs" app)
+			APISecret:   os.Getenv("ANGELONE_CLIENT_SECRET"),
+			OAuthURL:    "https://smartapi.angelone.in/publisher-login",
+			RedirectURI: redirect,
 		}
 	case "fyers":
 		return brokerConfig{
@@ -105,62 +105,11 @@ func ConnectBroker(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
 	var req struct {
 		BrokerName  string `json:"broker_name" binding:"required"`
-		AccessToken string `json:"access_token"` // For token-based brokers (Dhan, AngelOne)
+		AccessToken string `json:"access_token"` // For token-based brokers
 		ClientID    string `json:"client_id"`    // Optional — Dhan client ID for display
-		// AngelOne TOTP direct login
-		Password string `json:"password"`
-		TOTP     string `json:"totp"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "VALIDATION_ERROR", "message": err.Error()})
-		return
-	}
-
-	// ── AngelOne: TOTP-based direct login (no OAuth redirect) ──
-	if req.BrokerName == "angelone" {
-		cfg := getBrokerConfig("angelone")
-		if cfg.APIKey == "" {
-			c.JSON(http.StatusOK, gin.H{
-				"configured": false,
-				"needs_totp": true,
-				"message":    "AngelOne not configured. Set ANGELONE_CLIENT_ID and ANGELONE_API_KEY env vars.",
-			})
-			return
-		}
-		// If credentials not yet provided, prompt the frontend to show the TOTP modal
-		if req.ClientID == "" || req.Password == "" || req.TOTP == "" {
-			c.JSON(http.StatusOK, gin.H{
-				"configured": true,
-				"needs_totp": true,
-				"message":    "Provide your Angel One Client ID, PIN, and TOTP to connect.",
-			})
-			return
-		}
-		// Perform direct TOTP login
-		jwtToken, feedToken, expiresAt, err := loginAngelOne(req.ClientID, req.Password, req.TOTP, cfg.APIKey)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "ANGELONE_LOGIN_FAILED", "message": err.Error()})
-			return
-		}
-		// Upsert connection
-		var conn models.BrokerConnection
-		database.DB.Where("user_id = ? AND broker_name = ?", userID, "angelone").First(&conn)
-		conn.UserID = userID
-		conn.BrokerName = "angelone"
-		conn.DisplayName = "AngelOne SmartAPI"
-		conn.AccessToken = jwtToken
-		conn.FeedToken = feedToken
-		conn.ExternalUserID = req.ClientID
-		conn.TokenExpiresAt = expiresAt
-		conn.Status = "connected"
-		if conn.ID == uuid.Nil {
-			conn.ID = uuid.New()
-			database.DB.Create(&conn)
-		} else {
-			database.DB.Save(&conn)
-		}
-		database.DB.Where("user_id = ?", userID).Delete(&models.AnalyticsCache{})
-		c.JSON(http.StatusOK, gin.H{"connected": true, "connection": conn})
 		return
 	}
 
@@ -337,6 +286,13 @@ func buildOAuthURL(broker string, cfg brokerConfig, state string) string {
 		params.Set("response_type", "code")
 		params.Set("state", state)
 		return cfg.OAuthURL + "?" + params.Encode()
+
+	case "angelone":
+		// AngelOne Publisher login: returns auth_token directly in callback (no code exchange needed)
+		params := url.Values{}
+		params.Set("api_key", cfg.APIKey)
+		params.Set("state", state)
+		return cfg.OAuthURL + "?" + params.Encode()
 	}
 	return ""
 }
@@ -365,6 +321,31 @@ func OAuthCallback(c *gin.Context) {
 		// Forward to frontend as standard code+state+broker so OAuthCallbackHandler works unchanged
 		redirectURL := fmt.Sprintf("%s/dashboard/brokers?code=%s&state=%s&broker=dhan",
 			frontendBase, url.QueryEscape(tokenID), url.QueryEscape(dhanState.State))
+		c.Redirect(http.StatusFound, redirectURL)
+		return
+	}
+
+	// ── AngelOne Publisher Login: returns ?auth_token= (already a JWT, no exchange needed) ──
+	authToken := c.Query("auth_token")
+	if authToken != "" {
+		feedToken := c.Query("feed_token")
+		state := c.Query("state")
+		// State may not always be returned (known AngelOne quirk) — fall back to most recent active state
+		var angelState models.BrokerOAuthState
+		if state != "" {
+			database.DB.Where("state = ? AND broker_name = ? AND expires_at > ?", state, "angelone", time.Now()).First(&angelState)
+		}
+		if angelState.ID == uuid.Nil {
+			database.DB.Where("broker_name = ? AND expires_at > ?", "angelone", time.Now()).
+				Order("created_at DESC").First(&angelState)
+		}
+		if angelState.ID == uuid.Nil {
+			c.Redirect(http.StatusFound, frontendBase+"/dashboard/brokers?error=angelone_state_not_found")
+			return
+		}
+		// Pass auth_token as "code" and feedToken as "refresh_token" so BrokerCallback can store both
+		redirectURL := fmt.Sprintf("%s/dashboard/brokers?code=%s&state=%s&broker=angelone&feed_token=%s",
+			frontendBase, url.QueryEscape(authToken), url.QueryEscape(angelState.State), url.QueryEscape(feedToken))
 		c.Redirect(http.StatusFound, redirectURL)
 		return
 	}
@@ -405,6 +386,7 @@ func BrokerCallback(c *gin.Context) {
 		BrokerName string `json:"broker_name" binding:"required"`
 		Code       string `json:"code" binding:"required"`
 		State      string `json:"state" binding:"required"`
+		FeedToken  string `json:"feed_token"` // AngelOne publisher login returns this alongside auth_token
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "VALIDATION_ERROR", "message": err.Error()})
@@ -442,6 +424,9 @@ func BrokerCallback(c *gin.Context) {
 	conn.TokenExpiresAt = expiresAt
 	conn.Status = "connected"
 	conn.ConnectedAt = now
+	if req.FeedToken != "" {
+		conn.FeedToken = req.FeedToken
+	}
 
 	if conn.ID == uuid.Nil {
 		conn.ID = uuid.New()
@@ -572,6 +557,12 @@ func exchangeToken(broker string, cfg brokerConfig, code string) (accessToken, r
 		return exchangeFyers(cfg, code)
 	case "dhan":
 		return exchangeDhan(cfg, code)
+	case "angelone":
+		// auth_token from publisher-login is already the final JWT — no exchange needed
+		ist, _ := time.LoadLocation("Asia/Kolkata")
+		tomorrow := time.Now().In(ist).AddDate(0, 0, 1)
+		exp := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 5, 0, 0, 0, ist).UTC()
+		return code, "", &exp, nil
 	}
 	return "", "", nil, fmt.Errorf("unsupported broker: %s", broker)
 }
