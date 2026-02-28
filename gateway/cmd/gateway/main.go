@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 
 	"tradeiq/gateway/internal/analytics"
 	"tradeiq/gateway/internal/auth"
@@ -32,14 +33,25 @@ func main() {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
-	// Build CORS origins: always include localhost dev + known prod domains.
-	// Add FRONTEND_URL from env so Vercel preview URLs and custom domains work.
-	corsOrigins := []string{"http://localhost:3000", "https://tradeiq.in", "https://www.tradeiq.in"}
-	if fu := os.Getenv("FRONTEND_URL"); fu != "" {
-		corsOrigins = append(corsOrigins, fu)
-	}
+	// CORS: allow localhost, known prod domains, all *.vercel.app previews,
+	// and any extra origin set via FRONTEND_URL env var.
+	extraOrigin := os.Getenv("FRONTEND_URL")
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     corsOrigins,
+		AllowOriginFunc: func(origin string) bool {
+			if origin == "http://localhost:3000" {
+				return true
+			}
+			if strings.HasSuffix(origin, ".vercel.app") {
+				return true
+			}
+			if origin == "https://tradeiq.in" || origin == "https://www.tradeiq.in" {
+				return true
+			}
+			if extraOrigin != "" && origin == extraOrigin {
+				return true
+			}
+			return false
+		},
 		AllowMethods:     []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Authorization", "Content-Type"},
 		AllowCredentials: true,
