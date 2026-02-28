@@ -80,8 +80,8 @@ func getBrokerConfig(broker string) brokerConfig {
 		}
 	case "dhan":
 		return brokerConfig{
-			APIKey:   os.Getenv("DHAN_CLIENT_ID"),
-			APISecret: os.Getenv("DHAN_ACCESS_TOKEN"), // Dhan uses fixed access tokens
+			APIKey:    os.Getenv("DHAN_APP_ID"),     // app_id header for Dhan consent API
+			APISecret: os.Getenv("DHAN_APP_SECRET"), // app_secret header for Dhan consent API
 		}
 	}
 	return brokerConfig{}
@@ -113,52 +113,39 @@ func ConnectBroker(c *gin.Context) {
 		return
 	}
 
-	// ── Dhan: token-based, no OAuth ──────────────────────
+	// ── Dhan: OAuth consent flow ──────────────────────────
 	if req.BrokerName == "dhan" {
-		if req.AccessToken == "" {
-			// Tell frontend to show token input modal
+		cfg := getBrokerConfig("dhan")
+		if cfg.APIKey == "" || cfg.APISecret == "" {
 			c.JSON(http.StatusOK, gin.H{
-				"oauth_url":    "",
-				"state":        "",
-				"token_based":  true,
-				"configured":   false,
-				"message":      "Dhan requires an access token. Generate yours at web.dhan.co → My Profile → Access DhanHQ APIs",
+				"oauth_url":  "",
+				"configured": false,
+				"message":    "Dhan not configured. Set DHAN_APP_ID, DHAN_APP_SECRET, and DHAN_CLIENT_ID env vars.",
 			})
 			return
 		}
 
-		// Validate token by calling Dhan profile endpoint
-		dhanClientID, err := validateDhanToken(req.AccessToken)
+		consentAppID, err := generateDhanConsent(cfg)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "INVALID_TOKEN", "message": "Invalid Dhan access token: " + err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": true, "code": "DHAN_CONSENT_FAILED", "message": "Dhan consent error: " + err.Error()})
 			return
 		}
 
-		// Dhan token is valid for 24 hours from generation
-		expiresAt := time.Now().Add(24 * time.Hour)
-		now := time.Now()
+		// Store consentAppID as state — OAuthCallback uses it to link the tokenId back to this user
+		database.DB.Where("user_id = ? AND broker_name = ?", userID, "dhan").Delete(&models.BrokerOAuthState{})
+		database.DB.Create(&models.BrokerOAuthState{
+			ID:         uuid.New(),
+			UserID:     userID,
+			BrokerName: "dhan",
+			State:      consentAppID,
+			ExpiresAt:  time.Now().Add(10 * time.Minute),
+		})
 
-		conn := models.BrokerConnection{}
-		database.DB.Where("user_id = ? AND broker_name = ?", userID, "dhan").First(&conn)
-		conn.UserID = userID
-		conn.BrokerName = "dhan"
-		conn.DisplayName = "Dhan HQ — " + dhanClientID
-		conn.AccessToken = req.AccessToken
-		conn.TokenExpiresAt = &expiresAt
-		conn.Status = "connected"
-		conn.ConnectedAt = now
-
-		if conn.ID == uuid.Nil {
-			conn.ID = uuid.New()
-			database.DB.Create(&conn)
-		} else {
-			database.DB.Save(&conn)
-		}
-
+		oauthURL := "https://auth.dhan.co/login/consentApp-login?consentAppId=" + consentAppID
 		c.JSON(http.StatusOK, gin.H{
-			"connection": conn,
-			"connected":  true,
-			"message":    fmt.Sprintf("Dhan account %s connected. Click Sync Now to import trades.", dhanClientID),
+			"oauth_url":  oauthURL,
+			"state":      consentAppID,
+			"configured": true,
 		})
 		return
 	}
@@ -199,41 +186,83 @@ func ConnectBroker(c *gin.Context) {
 	})
 }
 
-// validateDhanToken calls GET /v2/profile to confirm token is valid.
-// Returns the dhanClientId on success.
-func validateDhanToken(token string) (string, error) {
-	req, _ := http.NewRequest("GET", "https://api.dhan.co/v2/profile", nil)
-	req.Header.Set("access-token", token)
+// generateDhanConsent calls POST https://auth.dhan.co/app/generate-consent
+// and returns the consentAppId needed to redirect the user for login.
+func generateDhanConsent(cfg brokerConfig) (string, error) {
+	clientID := os.Getenv("DHAN_CLIENT_ID") // TradeIQ developer's Dhan account ID
+	if clientID == "" {
+		return "", fmt.Errorf("DHAN_CLIENT_ID env var not set")
+	}
+
+	apiURL := "https://auth.dhan.co/app/generate-consent?client_id=" + clientID
+	req, err := http.NewRequest("POST", apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("app_id", cfg.APIKey)
+	req.Header.Set("app_secret", cfg.APISecret)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
+	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
 
-	// Dhan returns 400 (DH-906) for invalid tokens, 401 for expired ones.
-	// Any non-200 response means the token is unusable.
 	if resp.StatusCode != http.StatusOK {
-		var dhanErr struct {
-			ErrorCode    string `json:"errorCode"`
-			ErrorMessage string `json:"errorMessage"`
-		}
-		if jsonErr := json.Unmarshal(body, &dhanErr); jsonErr == nil && dhanErr.ErrorMessage != "" {
-			return "", fmt.Errorf("%s (%s)", dhanErr.ErrorMessage, dhanErr.ErrorCode)
-		}
-		return "", fmt.Errorf("Dhan API returned HTTP %d — token may be invalid or expired", resp.StatusCode)
+		return "", fmt.Errorf("dhan consent HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
-	var profile struct {
-		DhanClientID string `json:"dhanClientId"`
-		ClientName   string `json:"clientName"`
+	var result struct {
+		ConsentAppID     string `json:"consentAppId"`
+		ConsentAppStatus string `json:"consentAppStatus"`
 	}
-	if err := json.Unmarshal(body, &profile); err != nil || profile.DhanClientID == "" {
-		return "unknown", nil
+	if err := json.Unmarshal(body, &result); err != nil || result.ConsentAppID == "" {
+		return "", fmt.Errorf("unexpected dhan consent response: %s", string(body))
 	}
-	return profile.DhanClientID, nil
+	return result.ConsentAppID, nil
+}
+
+// exchangeDhan exchanges a Dhan tokenId (from OAuth callback) for a permanent access token
+// via GET https://auth.dhan.co/app/consumeApp-consent?tokenId={tokenId}
+func exchangeDhan(cfg brokerConfig, tokenID string) (string, string, *time.Time, error) {
+	apiURL := "https://auth.dhan.co/app/consumeApp-consent?tokenId=" + tokenID
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return "", "", nil, err
+	}
+	req.Header.Set("app_id", cfg.APIKey)
+	req.Header.Set("app_secret", cfg.APISecret)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", nil, fmt.Errorf("dhan consume-consent HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		DhanClientID   string `json:"dhanClientId"`
+		DhanClientName string `json:"dhanClientName"`
+		AccessToken    string `json:"accessToken"`
+		ExpiryTime     string `json:"expiryTime"` // "2025-09-23T12:37:23"
+	}
+	if err := json.Unmarshal(body, &result); err != nil || result.AccessToken == "" {
+		return "", "", nil, fmt.Errorf("dhan consume-consent decode error: %s", string(body))
+	}
+
+	// Parse expiry; default to 24h if format differs
+	expiry, err := time.Parse("2006-01-02T15:04:05", result.ExpiryTime)
+	if err != nil {
+		expiry = time.Now().Add(24 * time.Hour)
+	}
+	return result.AccessToken, "", &expiry, nil
 }
 
 func buildOAuthURL(broker string, cfg brokerConfig, state string) string {
@@ -266,14 +295,33 @@ func buildOAuthURL(broker string, cfg brokerConfig, state string) string {
 // This public endpoint then redirects to frontend with the code+state.
 
 func OAuthCallback(c *gin.Context) {
-	code := c.Query("code")
-	state := c.Query("state")
-	broker := c.Query("broker") // some brokers include this
-
 	frontendBase := os.Getenv("FRONTEND_URL")
 	if frontendBase == "" {
 		frontendBase = "http://localhost:3000"
 	}
+
+	// ── Dhan: returns ?tokenId= instead of standard ?code=&state= ──
+	// Dhan's configured redirect URL receives only tokenId — no state is echoed back.
+	// We look up the most recently created active Dhan state to reconnect it to the user.
+	tokenID := c.Query("tokenId")
+	if tokenID != "" {
+		var dhanState models.BrokerOAuthState
+		if err := database.DB.Where("broker_name = ? AND expires_at > ?", "dhan", time.Now()).
+			Order("created_at DESC").First(&dhanState).Error; err != nil {
+			c.Redirect(http.StatusFound, frontendBase+"/dashboard/brokers?error=dhan_state_not_found")
+			return
+		}
+		// Forward to frontend as standard code+state+broker so OAuthCallbackHandler works unchanged
+		redirectURL := fmt.Sprintf("%s/dashboard/brokers?code=%s&state=%s&broker=dhan",
+			frontendBase, url.QueryEscape(tokenID), url.QueryEscape(dhanState.State))
+		c.Redirect(http.StatusFound, redirectURL)
+		return
+	}
+
+	// ── Standard OAuth (Zerodha, Upstox, Fyers …) ──
+	code := c.Query("code")
+	state := c.Query("state")
+	broker := c.Query("broker")
 
 	if code == "" || state == "" {
 		c.Redirect(http.StatusFound, frontendBase+"/dashboard/brokers?error=oauth_failed")
@@ -471,6 +519,8 @@ func exchangeToken(broker string, cfg brokerConfig, code string) (accessToken, r
 		return exchangeUpstox(cfg, code)
 	case "fyers":
 		return exchangeFyers(cfg, code)
+	case "dhan":
+		return exchangeDhan(cfg, code)
 	}
 	return "", "", nil, fmt.Errorf("unsupported broker: %s", broker)
 }
