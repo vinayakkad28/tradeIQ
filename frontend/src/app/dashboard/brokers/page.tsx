@@ -5,11 +5,11 @@ import { brokerAPI } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
 
 const SUPPORTED_BROKERS = [
-  { id: 'zerodha',  name: 'Zerodha',   description: 'Kite API — OAuth 2.0', logo: 'Z', color: '#387ed1' },
-  { id: 'upstox',   name: 'Upstox',    description: 'Upstox Pro API v2',    logo: 'U', color: '#7ac231' },
-  { id: 'angelone', name: 'AngelOne',  description: 'SmartAPI REST',        logo: 'A', color: '#f77f00' },
-  { id: 'fyers',    name: 'Fyers',     description: 'Fyers API v3',         logo: 'F', color: '#1e6fd9' },
-  { id: 'dhan',     name: 'Dhan',      description: 'Dhan HQ Trading API',  logo: 'D', color: '#6d2bff' },
+  { id: 'zerodha',  name: 'Zerodha',   description: 'Kite API — OAuth 2.0',       logo: 'Z', color: '#387ed1', tokenBased: false },
+  { id: 'upstox',   name: 'Upstox',    description: 'Upstox Pro API v2',           logo: 'U', color: '#7ac231', tokenBased: false },
+  { id: 'angelone', name: 'AngelOne',  description: 'SmartAPI REST',               logo: 'A', color: '#f77f00', tokenBased: false },
+  { id: 'fyers',    name: 'Fyers',     description: 'Fyers API v3',                logo: 'F', color: '#1e6fd9', tokenBased: false },
+  { id: 'dhan',     name: 'Dhan',      description: 'Dhan HQ v2 — Access Token',   logo: 'D', color: '#6d2bff', tokenBased: true  },
 ]
 
 type Connection = {
@@ -65,6 +65,12 @@ export default function BrokersPage() {
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [loadingList, setLoadingList] = useState(true)
 
+  // Dhan token modal state
+  const [dhanModal, setDhanModal] = useState(false)
+  const [dhanToken, setDhanToken] = useState('')
+  const [dhanConnecting, setDhanConnecting] = useState(false)
+  const [dhanError, setDhanError] = useState<string | null>(null)
+
   const fetchConnections = async () => {
     if (!isAuthenticated) { setLoadingList(false); return }
     try {
@@ -100,6 +106,26 @@ export default function BrokersPage() {
       setTimeout(() => setSyncMessage(null), 3000)
     } finally {
       setConnecting(null)
+    }
+  }
+
+  const handleConnectDhan = async () => {
+    if (!dhanToken.trim()) { setDhanError('Access token is required.'); return }
+    setDhanConnecting(true)
+    setDhanError(null)
+    try {
+      const res = await brokerAPI.connectWithToken('dhan', dhanToken.trim())
+      const msg = res.data.message || 'Dhan connected successfully!'
+      setSyncMessage(msg)
+      setTimeout(() => setSyncMessage(null), 5000)
+      setDhanModal(false)
+      setDhanToken('')
+      fetchConnections()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+      setDhanError(msg || 'Connection failed. Check your access token and try again.')
+    } finally {
+      setDhanConnecting(false)
     }
   }
 
@@ -143,6 +169,79 @@ export default function BrokersPage() {
           isAuthenticated={isAuthenticated}
         />
       </Suspense>
+
+      {/* Dhan Access Token Modal */}
+      {dhanModal && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 50,
+          background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div className="terminal-card" style={{ width: '100%', maxWidth: 480, padding: '2rem', position: 'relative' }}>
+            {/* Close */}
+            <button
+              onClick={() => { setDhanModal(false); setDhanToken(''); setDhanError(null) }}
+              style={{ position: 'absolute', top: '1rem', right: '1rem', background: 'none', border: 'none', color: 'var(--color-text-muted)', cursor: 'pointer', fontSize: '1.2rem', lineHeight: 1 }}
+            >✕</button>
+
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
+              <div style={{ width: 40, height: 40, borderRadius: 8, background: '#6d2bff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: '1rem', color: '#fff' }}>D</div>
+              <div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--color-text-primary)' }}>Connect Dhan HQ</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--color-text-muted)' }}>Dhan v2 API — access token auth</div>
+              </div>
+            </div>
+
+            {/* Instructions */}
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: 'var(--color-text-muted)', lineHeight: 1.7, marginBottom: '1.25rem', background: 'rgba(109,43,255,0.07)', border: '1px solid rgba(109,43,255,0.2)', borderRadius: 4, padding: '0.75rem 1rem' }}>
+              <div style={{ color: 'var(--color-text-secondary)', fontWeight: 700, marginBottom: '0.4rem' }}>How to get your access token:</div>
+              <div>1. Log in at <span style={{ color: '#6d2bff' }}>web.dhan.co</span></div>
+              <div>2. Go to <strong>My Profile</strong> → <strong>Access DhanHQ APIs</strong></div>
+              <div>3. Click <strong>Generate Access Token</strong></div>
+              <div>4. Copy and paste the token below</div>
+              <div style={{ marginTop: '0.4rem', color: 'var(--color-amber-primary)' }}>Token expires every 24 hours — reconnect daily.</div>
+            </div>
+
+            {/* Token input */}
+            <label style={{ display: 'block', fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: 'var(--color-text-muted)', marginBottom: '0.4rem' }}>
+              Access Token
+            </label>
+            <textarea
+              value={dhanToken}
+              onChange={e => { setDhanToken(e.target.value); setDhanError(null) }}
+              placeholder="Paste your Dhan access token here…"
+              rows={4}
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                fontFamily: 'var(--font-mono)', fontSize: '0.72rem',
+                background: 'var(--color-bg-card)', color: 'var(--color-text-primary)',
+                border: `1px solid ${dhanError ? 'var(--color-negative)' : 'var(--color-border)'}`,
+                borderRadius: 4, padding: '0.625rem 0.75rem', resize: 'vertical',
+                outline: 'none', lineHeight: 1.5,
+              }}
+            />
+            {dhanError && (
+              <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-negative)', marginTop: '0.4rem' }}>{dhanError}</div>
+            )}
+
+            {/* Actions */}
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.25rem', justifyContent: 'flex-end' }}>
+              <button
+                className="btn-ghost"
+                onClick={() => { setDhanModal(false); setDhanToken(''); setDhanError(null) }}
+              >Cancel</button>
+              <button
+                className="btn-primary"
+                onClick={handleConnectDhan}
+                disabled={dhanConnecting || !dhanToken.trim()}
+              >
+                {dhanConnecting ? 'Connecting…' : 'Connect Dhan'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Connected Accounts */}
       <div>
@@ -227,6 +326,14 @@ export default function BrokersPage() {
                 </div>
                 {isConnected ? (
                   <span className="badge badge-green" style={{ alignSelf: 'flex-start' }}>CONNECTED</span>
+                ) : broker.tokenBased ? (
+                  <button
+                    className="btn-primary"
+                    onClick={() => { setDhanModal(true); setDhanError(null) }}
+                    style={{ width: '100%', justifyContent: 'center' }}
+                  >
+                    Enter Access Token
+                  </button>
                 ) : (
                   <button
                     className="btn-primary"

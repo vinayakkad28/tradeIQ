@@ -17,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 )
 
 // ─── SUPPORTED BROKERS ────────────────────────────────────
@@ -103,10 +104,62 @@ func ListBrokers(c *gin.Context) {
 func ConnectBroker(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
 	var req struct {
-		BrokerName string `json:"broker_name" binding:"required"`
+		BrokerName  string `json:"broker_name" binding:"required"`
+		AccessToken string `json:"access_token"` // For token-based brokers (Dhan, AngelOne)
+		ClientID    string `json:"client_id"`    // Optional — Dhan client ID for display
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "VALIDATION_ERROR", "message": err.Error()})
+		return
+	}
+
+	// ── Dhan: token-based, no OAuth ──────────────────────
+	if req.BrokerName == "dhan" {
+		if req.AccessToken == "" {
+			// Tell frontend to show token input modal
+			c.JSON(http.StatusOK, gin.H{
+				"oauth_url":    "",
+				"state":        "",
+				"token_based":  true,
+				"configured":   false,
+				"message":      "Dhan requires an access token. Generate yours at web.dhan.co → My Profile → Access DhanHQ APIs",
+			})
+			return
+		}
+
+		// Validate token by calling Dhan profile endpoint
+		dhanClientID, err := validateDhanToken(req.AccessToken)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "INVALID_TOKEN", "message": "Invalid Dhan access token: " + err.Error()})
+			return
+		}
+
+		// Dhan token is valid for 24 hours from generation
+		expiresAt := time.Now().Add(24 * time.Hour)
+		now := time.Now()
+
+		conn := models.BrokerConnection{}
+		database.DB.Where("user_id = ? AND broker_name = ?", userID, "dhan").First(&conn)
+		conn.UserID = userID
+		conn.BrokerName = "dhan"
+		conn.DisplayName = "Dhan HQ — " + dhanClientID
+		conn.AccessToken = req.AccessToken
+		conn.TokenExpiresAt = &expiresAt
+		conn.Status = "connected"
+		conn.ConnectedAt = now
+
+		if conn.ID == uuid.Nil {
+			conn.ID = uuid.New()
+			database.DB.Create(&conn)
+		} else {
+			database.DB.Save(&conn)
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"connection": conn,
+			"connected":  true,
+			"message":    fmt.Sprintf("Dhan account %s connected. Click Sync Now to import trades.", dhanClientID),
+		})
 		return
 	}
 
@@ -115,9 +168,9 @@ func ConnectBroker(c *gin.Context) {
 	// If no API key configured, return info message
 	if cfg.APIKey == "" {
 		c.JSON(http.StatusOK, gin.H{
-			"oauth_url": "",
-			"state":     "",
-			"message":   fmt.Sprintf("%s OAuth not yet configured. Set %s_API_KEY env var.", req.BrokerName, strings.ToUpper(req.BrokerName)),
+			"oauth_url":  "",
+			"state":      "",
+			"message":    fmt.Sprintf("%s OAuth not yet configured. Set %s_API_KEY env var.", req.BrokerName, strings.ToUpper(req.BrokerName)),
 			"configured": false,
 		})
 		return
@@ -144,6 +197,37 @@ func ConnectBroker(c *gin.Context) {
 		"state":      state,
 		"configured": true,
 	})
+}
+
+// validateDhanToken calls GET /v2/profile to confirm token is valid
+// Returns the dhanClientId on success.
+func validateDhanToken(token string) (string, error) {
+	req, _ := http.NewRequest("GET", "https://api.dhan.co/v2/profile", nil)
+	req.Header.Set("access-token", token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", fmt.Errorf("token rejected by Dhan (HTTP 401)")
+	}
+
+	var profile struct {
+		DhanClientID string `json:"dhanClientId"`
+		ClientName   string `json:"clientName"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&profile); err != nil {
+		// Non-fatal — token might still be valid even if profile parsing fails
+		return "unknown", nil
+	}
+	if profile.DhanClientID == "" {
+		return "unknown", nil
+	}
+	return profile.DhanClientID, nil
 }
 
 func buildOAuthURL(broker string, cfg brokerConfig, state string) string {
@@ -626,57 +710,169 @@ func fetchUpstoxTrades(conn models.BrokerConnection, cfg brokerConfig, userID uu
 	return trades, nil
 }
 
-func fetchDhanTrades(conn models.BrokerConnection, cfg brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
-	req, _ := http.NewRequest("GET", "https://api.dhan.co/trades", nil)
-	req.Header.Set("Authorization", conn.AccessToken)
-	req.Header.Set("Content-Type", "application/json")
-	if cfg.APIKey != "" {
-		req.Header.Set("client-id", cfg.APIKey)
-	}
+// dhanTrade mirrors the Dhan v2 trade history response fields.
+type dhanTrade struct {
+	DhanClientID               string  `json:"dhanClientId"`
+	OrderID                    string  `json:"orderId"`
+	ExchangeOrderID            string  `json:"exchangeOrderId"`
+	ExchangeTradeID            string  `json:"exchangeTradeId"`
+	TransactionType            string  `json:"transactionType"` // BUY / SELL
+	ExchangeSegment            string  `json:"exchangeSegment"` // NSE_EQ, NSE_FNO, BSE_EQ, NSE_CURR, MCX_COMM …
+	ProductType                string  `json:"productType"`     // CNC, INTRADAY, MARGIN, MTF, CO, BO
+	OrderType                  string  `json:"orderType"`
+	TradingSymbol              string  `json:"tradingSymbol"`
+	CustomSymbol               string  `json:"customSymbol"`
+	SecurityID                 string  `json:"securityId"`
+	TradedQuantity             int     `json:"tradedQuantity"`
+	TradedPrice                float64 `json:"tradedPrice"`
+	ISIN                       string  `json:"isin"`
+	Instrument                 string  `json:"instrument"` // EQUITY / DERIVATIVES
+	SebiTax                    float64 `json:"sebiTax"`
+	STT                        float64 `json:"stt"`
+	BrokerageCharges           float64 `json:"brokerageCharges"`
+	ServiceTax                 float64 `json:"serviceTax"`
+	ExchangeTransactionCharges float64 `json:"exchangeTransactionCharges"`
+	StampDuty                  float64 `json:"stampDuty"`
+	CreateTime                 string  `json:"createTime"`
+	UpdateTime                 string  `json:"updateTime"`
+	ExchangeTime               string  `json:"exchangeTime"`
+	DrvExpiryDate              string  `json:"drvExpiryDate"`
+	DrvOptionType              string  `json:"drvOptionType"` // CALL / PUT
+	DrvStrikePrice             float64 `json:"drvStrikePrice"`
+}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
+func fetchDhanTrades(conn models.BrokerConnection, _ brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
+	// Fetch last 90 days. Dhan returns data oldest-first per page.
+	toDate := time.Now().Format("2006-01-02")
+	fromDate := time.Now().AddDate(0, 0, -90).Format("2006-01-02")
 
-	var result []struct {
-		OrderID         string  `json:"orderId"`
-		TradingSymbol   string  `json:"tradingSymbol"`
-		SecurityID      string  `json:"securityId"`
-		TransactionType string  `json:"transactionType"` // BUY/SELL
-		ExchangeSegment string  `json:"exchangeSegment"`
-		ProductType     string  `json:"productType"`
-		Quantity        int     `json:"quantity"`
-		TradedPrice     float64 `json:"tradedPrice"`
-		CreateTime      string  `json:"createTime"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-
-	var trades []models.Trade
 	connID := conn.ID
-	for _, t := range result {
-		tradeTime, _ := time.Parse("2006-01-02 15:04:05", t.CreateTime)
-		segment := classifyDhanSegment(t.ExchangeSegment)
-		trades = append(trades, models.Trade{
-			ID:                 uuid.New(),
-			UserID:             userID,
-			BrokerConnectionID: &connID,
-			BrokerTradeID:      t.OrderID,
-			TradeDate:          tradeTime,
-			EntryTime:          tradeTime,
-			Instrument:         t.TradingSymbol,
-			Segment:            segment,
-			Direction:          t.TransactionType,
-			EntryPrice:         t.TradedPrice,
-			Quantity:           t.Quantity,
-			Source:             "oauth",
-		})
+	var allTrades []models.Trade
+
+	for page := 0; page <= 50; page++ { // page 0-based; 50-page safety cap
+		apiURL := fmt.Sprintf("https://api.dhan.co/v2/trades/%s/%s/%d", fromDate, toDate, page)
+
+		req, err := http.NewRequest("GET", apiURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("dhan: build request: %w", err)
+		}
+		// Dhan v2 auth: access-token header (JWT embeds client-id — no separate client-id header)
+		req.Header.Set("access-token", conn.AccessToken)
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("dhan: http error: %w", err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("dhan: access token expired or invalid (HTTP 401)")
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("dhan: unexpected status %d: %s", resp.StatusCode, string(body))
+		}
+
+		var page_trades []dhanTrade
+		if err := json.Unmarshal(body, &page_trades); err != nil {
+			return nil, fmt.Errorf("dhan: decode response: %w", err)
+		}
+		if len(page_trades) == 0 {
+			break // No more pages
+		}
+
+		for _, t := range page_trades {
+			tradeTime := parseDhanTime(t.CreateTime, t.ExchangeTime)
+			segment := classifyDhanSegment(t.ExchangeSegment, t.ProductType)
+			instrumentType := dhanInstrumentType(t.ExchangeSegment, t.DrvOptionType)
+			instrument := buildDhanInstrumentName(t)
+
+			// Total charges: sum all Dhan-provided tax/fee fields
+			charges := t.SebiTax + t.STT + t.BrokerageCharges + t.ServiceTax +
+				t.ExchangeTransactionCharges + t.StampDuty
+
+			// Prefer exchange trade ID for deduplication; fall back to order ID
+			brokerTradeID := t.ExchangeTradeID
+			if brokerTradeID == "" {
+				brokerTradeID = t.OrderID
+			}
+
+			rawJSON, _ := json.Marshal(t)
+
+			allTrades = append(allTrades, models.Trade{
+				ID:                 uuid.New(),
+				UserID:             userID,
+				BrokerConnectionID: &connID,
+				BrokerTradeID:      brokerTradeID,
+				TradeDate:          tradeTime,
+				EntryTime:          tradeTime,
+				Instrument:         instrument,
+				InstrumentType:     instrumentType,
+				Segment:            segment,
+				Direction:          t.TransactionType, // "BUY" or "SELL"
+				EntryPrice:         t.TradedPrice,
+				Quantity:           t.TradedQuantity,
+				Charges:            charges,
+				Source:             "dhan_v2",
+				RawData:            datatypes.JSON(rawJSON),
+			})
+		}
 	}
-	return trades, nil
+
+	return allTrades, nil
+}
+
+// parseDhanTime parses Dhan timestamp strings ("2006-01-02 15:04:05").
+func parseDhanTime(primary, fallback string) time.Time {
+	for _, s := range []string{primary, fallback} {
+		if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+			return t
+		}
+	}
+	return time.Now()
+}
+
+// buildDhanInstrumentName produces a human-readable symbol.
+// For derivatives it appends expiry + strike + option type.
+func buildDhanInstrumentName(t dhanTrade) string {
+	if t.DrvStrikePrice > 0 && t.DrvOptionType != "" {
+		optSuffix := "CE"
+		if strings.ToUpper(t.DrvOptionType) == "PUT" {
+			optSuffix = "PE"
+		}
+		expiry := t.DrvExpiryDate
+		if len(expiry) == 10 { // YYYY-MM-DD → DDMMMYY
+			if parsed, err := time.Parse("2006-01-02", expiry); err == nil {
+				expiry = parsed.Format("02Jan06")
+			}
+		}
+		return fmt.Sprintf("%s %s %.0f%s", t.TradingSymbol, expiry, t.DrvStrikePrice, optSuffix)
+	}
+	return t.TradingSymbol
+}
+
+// dhanInstrumentType maps segment + option type to CE / PE / FUT / EQ.
+func dhanInstrumentType(segment, drvOptionType string) string {
+	seg := strings.ToUpper(segment)
+	if seg == "NSE_FNO" || seg == "BSE_FNO" {
+		switch strings.ToUpper(drvOptionType) {
+		case "CALL":
+			return "CE"
+		case "PUT":
+			return "PE"
+		default:
+			return "FUT"
+		}
+	}
+	if seg == "MCX_COMM" {
+		return "COMM"
+	}
+	if seg == "NSE_CURR" || seg == "BSE_CURR" {
+		return "CURR"
+	}
+	return "EQ"
 }
 
 // ─────────────────────────────────────────────────────────
@@ -695,11 +891,19 @@ func classifySegment(exchange, product string) string {
 	return "EQ"
 }
 
-func classifyDhanSegment(exchangeSegment string) string {
-	switch strings.ToUpper(exchangeSegment) {
-	case "NSE_FNO", "BSE_FNO", "MCX_COMM":
+func classifyDhanSegment(exchangeSegment, productType string) string {
+	seg := strings.ToUpper(exchangeSegment)
+	switch seg {
+	case "NSE_FNO", "BSE_FNO":
 		return "FNO"
+	case "MCX_COMM":
+		return "COMM"
+	case "NSE_CURR", "BSE_CURR":
+		return "CURR"
 	case "NSE_EQ", "BSE_EQ":
+		if strings.ToUpper(productType) == "INTRADAY" {
+			return "EQ_INTRADAY"
+		}
 		return "EQ"
 	}
 	return "EQ"
