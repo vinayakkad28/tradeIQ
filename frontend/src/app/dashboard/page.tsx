@@ -72,8 +72,8 @@ export default function DashboardOverview() {
         </div>
       )}
 
-      {/* Primary Alert */}
-      {primaryInsight && (
+      {/* Primary Alert — only show when user has real data */}
+      {!isNewUser && primaryInsight && primaryInsight.title !== 'No data yet' && (
         <div className="terminal-card-amber pulse-alert" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.375rem' }}>
