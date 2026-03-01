@@ -1052,7 +1052,7 @@ func getTradesForRange(userID uuid.UUID, dateRange string) []models.Trade {
 		cutoff = time.Time{}
 	}
 	var trades []models.Trade
-	q := database.DB.Where("user_id = ?", userID)
+	q := database.DB.Where("user_id = ? AND status != 'fill'", userID)
 	if !cutoff.IsZero() {
 		q = q.Where("trade_date >= ?", cutoff)
 	}

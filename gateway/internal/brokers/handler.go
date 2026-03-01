@@ -277,7 +277,8 @@ func exchangeDhan(cfg brokerConfig, tokenID string) (string, string, *time.Time,
 	if err != nil {
 		expiry = time.Now().Add(24 * time.Hour)
 	}
-	return result.AccessToken, "", &expiry, nil
+	// Return DhanClientID as refreshToken slot so BrokerCallback can store it in ExternalUserID
+	return result.AccessToken, result.DhanClientID, &expiry, nil
 }
 
 func buildOAuthURL(broker string, cfg brokerConfig, state string) string {
@@ -449,10 +450,16 @@ func BrokerCallback(c *gin.Context) {
 	conn.BrokerName = req.BrokerName
 	conn.DisplayName = brokerDisplayName(req.BrokerName)
 	conn.AccessToken = accessToken
-	conn.RefreshToken = refreshToken
 	conn.TokenExpiresAt = expiresAt
 	conn.Status = "connected"
 	conn.ConnectedAt = now
+	if req.BrokerName == "dhan" {
+		// For Dhan, exchangeDhan returns DhanClientID in the refreshToken slot
+		conn.ExternalUserID = refreshToken
+		conn.RefreshToken = ""
+	} else {
+		conn.RefreshToken = refreshToken
+	}
 	if req.FeedToken != "" {
 		conn.FeedToken = req.FeedToken
 	}
@@ -1161,8 +1168,11 @@ func fetchDhanTrades(conn models.BrokerConnection, _ brokerConfig, userID uuid.U
 			if err != nil {
 				return nil, fmt.Errorf("dhan: build request: %w", err)
 			}
-			// Dhan v2 auth: access-token header (JWT embeds client-id — no separate client-id header)
+			// Dhan v2 auth: access-token header + client-id (the user's Dhan account ID)
 			req.Header.Set("access-token", conn.AccessToken)
+			if conn.ExternalUserID != "" {
+				req.Header.Set("client-id", conn.ExternalUserID)
+			}
 			req.Header.Set("Accept", "application/json")
 			req.Header.Set("Content-Type", "application/json")
 
@@ -1180,9 +1190,17 @@ func fetchDhanTrades(conn models.BrokerConnection, _ brokerConfig, userID uuid.U
 				return nil, fmt.Errorf("dhan: unexpected status %d: %s", resp.StatusCode, string(body))
 			}
 
+			// Dhan may return a bare array [] or a wrapped {"data": [...]} object
 			var pageTrades []dhanTrade
 			if err := json.Unmarshal(body, &pageTrades); err != nil {
-				return nil, fmt.Errorf("dhan: decode response: %w", err)
+				var wrapped struct {
+					Data []dhanTrade `json:"data"`
+				}
+				if err2 := json.Unmarshal(body, &wrapped); err2 != nil {
+					// Unrecognised response (e.g. an error string) — stop paging this window
+					break
+				}
+				pageTrades = wrapped.Data
 			}
 			if len(pageTrades) == 0 {
 				break // No more pages for this window
@@ -1236,11 +1254,13 @@ func fetchDhanTrades(conn models.BrokerConnection, _ brokerConfig, userID uuid.U
 }
 
 // reconcilePositions pairs raw BUY/SELL fills (stored with PnL=nil after broker sync)
-// into closed position records with computed P&L, then deletes the raw fills.
-// Groups fills by (instrument, calendar date). Uses weighted-average pricing.
+// into closed positions by UPDATING the fills in-place — no deletes, no new records.
+// Strategy: the earliest BUY fill per (instrument, date) group becomes the "position" record
+// (updated with exit_price, exit_time, pnl, net_pnl). All other fills are marked status="fill"
+// so they are excluded from analytics queries.
 func reconcilePositions(userID uuid.UUID, connID uuid.UUID) {
 	var fills []models.Trade
-	database.DB.Where("user_id = ? AND broker_connection_id = ? AND pnl IS NULL", userID, connID).
+	database.DB.Where("user_id = ? AND broker_connection_id = ? AND pnl IS NULL AND status != 'fill'", userID, connID).
 		Order("trade_date ASC, entry_time ASC").
 		Find(&fills)
 	if len(fills) == 0 {
@@ -1255,9 +1275,6 @@ func reconcilePositions(userID uuid.UUID, connID uuid.UUID) {
 		groups[k] = append(groups[k], f)
 	}
 
-	var toDelete []uuid.UUID
-	var toCreate []models.Trade
-
 	for _, grpFills := range groups {
 		var buys, sells []models.Trade
 		for _, f := range grpFills {
@@ -1268,14 +1285,13 @@ func reconcilePositions(userID uuid.UUID, connID uuid.UUID) {
 			}
 		}
 		if len(buys) == 0 || len(sells) == 0 {
-			// Open position (no matching side) — skip, leave unreconciled
+			// Open position — skip, leave unreconciled
 			continue
 		}
 
 		sort.Slice(buys, func(i, j int) bool { return buys[i].EntryTime.Before(buys[j].EntryTime) })
 		sort.Slice(sells, func(i, j int) bool { return sells[i].EntryTime.Before(sells[j].EntryTime) })
 
-		// Weighted-average buy and sell prices across all fills
 		var totalBuyQty, totalSellQty int
 		var totalBuyValue, totalSellValue, totalCharges float64
 		var exitTime time.Time
@@ -1303,39 +1319,31 @@ func reconcilePositions(userID uuid.UUID, connID uuid.UUID) {
 		grossPnL := (avgSell - avgBuy) * float64(matchedQty)
 		netPnL := grossPnL - totalCharges
 
-		refFill := grpFills[0]
-		connIDCopy := connID
-		pos := models.Trade{
-			ID:                 uuid.New(),
-			UserID:             userID,
-			BrokerConnectionID: &connIDCopy,
-			BrokerTradeID:      "pos_" + refFill.BrokerTradeID,
-			TradeDate:          refFill.TradeDate,
-			EntryTime:          refFill.EntryTime,
-			ExitTime:           &exitTime,
-			Instrument:         refFill.Instrument,
-			InstrumentType:     refFill.InstrumentType,
-			Segment:            refFill.Segment,
-			Direction:          "BUY",
-			EntryPrice:         avgBuy,
-			ExitPrice:          &avgSell,
-			Quantity:           matchedQty,
-			Charges:            totalCharges,
-			PnL:                &grossPnL,
-			NetPnL:             &netPnL,
-			Source:             refFill.Source,
-		}
-		toCreate = append(toCreate, pos)
-		for _, f := range grpFills {
-			toDelete = append(toDelete, f.ID)
-		}
-	}
+		// UPDATE the first BUY fill in-place to become the position record.
+		// This preserves its broker_trade_id so subsequent syncs dedup correctly.
+		positionFill := buys[0]
+		database.DB.Model(&models.Trade{}).Where("id = ?", positionFill.ID).Updates(map[string]interface{}{
+			"exit_price":      avgSell,
+			"exit_time":       exitTime,
+			"quantity":        matchedQty,
+			"pnl":             grossPnL,
+			"net_pnl":         netPnL,
+			"charges":         totalCharges,
+			"status":          "closed",
+		})
 
-	if len(toDelete) > 0 {
-		database.DB.Where("id IN ?", toDelete).Delete(&models.Trade{})
-	}
-	for i := range toCreate {
-		database.DB.Create(&toCreate[i])
+		// Mark all remaining fills (extra BUYs + all SELLs) as status="fill"
+		// so analytics queries exclude them. Their broker_trade_id stays in DB for dedup.
+		var fillIDs []uuid.UUID
+		for _, b := range buys[1:] {
+			fillIDs = append(fillIDs, b.ID)
+		}
+		for _, s := range sells {
+			fillIDs = append(fillIDs, s.ID)
+		}
+		if len(fillIDs) > 0 {
+			database.DB.Model(&models.Trade{}).Where("id IN ?", fillIDs).Update("status", "fill")
+		}
 	}
 }
 
