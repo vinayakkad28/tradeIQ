@@ -150,7 +150,7 @@ func ConnectBroker(c *gin.Context) {
 			BrokerName:  "dhan",
 			State:       consentAppID,
 			FrontendURL: frontendURL,
-			ExpiresAt:   time.Now().Add(10 * time.Minute),
+			ExpiresAt:   time.Now().Add(30 * time.Minute),
 		})
 
 		oauthURL := "https://auth.dhan.co/login/consentApp-login?consentAppId=" + consentAppID
@@ -186,7 +186,7 @@ func ConnectBroker(c *gin.Context) {
 		BrokerName:  req.BrokerName,
 		State:       state,
 		FrontendURL: frontendURL,
-		ExpiresAt:   time.Now().Add(10 * time.Minute),
+		ExpiresAt:   time.Now().Add(30 * time.Minute),
 	})
 
 	// Build OAuth URL
@@ -336,7 +336,7 @@ func OAuthCallback(c *gin.Context) {
 		if err := database.DB.Where("broker_name = ? AND expires_at > ?", "dhan", time.Now()).
 			Order("created_at DESC").First(&dhanState).Error; err != nil {
 			frontendBase := fallbackFrontend("")
-			c.Redirect(http.StatusFound, frontendBase+"/dashboard/brokers?error=dhan_state_not_found")
+			c.Redirect(http.StatusFound, frontendBase+"/dashboard/brokers?error=session_expired&broker=dhan")
 			return
 		}
 		frontendBase := fallbackFrontend(dhanState.FrontendURL)
