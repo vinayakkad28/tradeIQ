@@ -60,7 +60,7 @@ func main() {
 	// Health check
 	r.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok", "service": "tradeiq-gateway"}) })
 
-	// ── TEMP ADMIN: set user plan (remove after use) ──────
+	// ── TEMP ADMIN: set user plan + list users (remove after use) ──────
 	r.POST("/internal/admin/set-plan", func(c *gin.Context) {
 		var req struct {
 			Secret string `json:"secret"`
@@ -74,11 +74,19 @@ func main() {
 		if adminSecret == "" || req.Secret != adminSecret {
 			c.JSON(403, gin.H{"error": "forbidden"}); return
 		}
-		result := database.DB.Exec(`UPDATE users SET plan=? WHERE email=?`, req.Plan, req.Email)
+		result := database.DB.Exec(`UPDATE users SET plan=$1 WHERE LOWER(email)=LOWER($2)`, req.Plan, req.Email)
 		if result.Error != nil {
 			c.JSON(500, gin.H{"error": result.Error.Error()}); return
 		}
 		c.JSON(200, gin.H{"rows_affected": result.RowsAffected, "email": req.Email, "plan": req.Plan})
+	})
+	r.GET("/internal/admin/users", func(c *gin.Context) {
+		if c.Query("secret") != os.Getenv("ADMIN_SECRET") {
+			c.JSON(403, gin.H{"error": "forbidden"}); return
+		}
+		var rows []struct{ ID, Email, Plan string }
+		database.DB.Raw(`SELECT id::text, email, plan FROM users ORDER BY created_at DESC LIMIT 20`).Scan(&rows)
+		c.JSON(200, rows)
 	})
 
 	// Demo (no auth)
