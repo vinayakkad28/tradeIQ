@@ -1083,59 +1083,160 @@ func fetchZerodhaTrades(conn models.BrokerConnection, cfg brokerConfig, userID u
 	return trades, nil
 }
 
-func fetchUpstoxTrades(conn models.BrokerConnection, cfg brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
-	today := time.Now().Format("2006-01-02")
-	apiURL := fmt.Sprintf("https://api.upstox.com/v2/order/trades/get-trades-for-day?date=%s", today)
+// upstoxHistoricalTrade mirrors the Upstox v2/charges/historical-trades response.
+type upstoxHistoricalTrade struct {
+	Exchange        string  `json:"exchange"`
+	Segment         string  `json:"segment"`          // EQ, FO, COM, CD, MF
+	Quantity        int     `json:"quantity"`
+	ISIN            string  `json:"isin"`
+	TransactionType string  `json:"transaction_type"` // BUY / SELL
+	Price           float64 `json:"price"`
+	TradeDate       string  `json:"trade_date"` // YYYY-MM-DD
+	TradingSymbol   string  `json:"trading_symbol"`
+	TradeID         string  `json:"trade_id"`
+	OrderRefID      string  `json:"order_ref_id"`
+	Brokerage       float64 `json:"brokerage"`
+	TaxesCharges    struct {
+		STT                        float64 `json:"stt"`
+		SebiCharges                float64 `json:"sebi_charges"`
+		ExchangeTransactionCharges float64 `json:"exchange_transaction_charges"`
+		StampDuty                  float64 `json:"stamp_duty"`
+		GST                        float64 `json:"gst"`
+		Total                      float64 `json:"total"`
+	} `json:"taxes_charges"`
+	SegmentInformation struct {
+		InstrumentType string  `json:"instrument_type"` // EQ, FUT, CE, PE
+		ExpiryDate     string  `json:"expiry_date"`
+		StrikePrice    float64 `json:"strike_price"`
+		OptionType     string  `json:"option_type"` // CE / PE
+	} `json:"segment_information"`
+}
 
-	req, _ := http.NewRequest("GET", apiURL, nil)
-	req.Header.Set("Authorization", "Bearer "+conn.AccessToken)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
+func fetchUpstoxTrades(conn models.BrokerConnection, _ brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
+	// Use the charges/historical-trades endpoint which covers the last 3 financial years.
+	// A financial year runs April 1 – March 31. We compute start = April 1 three FYs ago.
+	now := time.Now()
+	fyStartYear := now.Year() - 3
+	if now.Month() < time.April {
+		fyStartYear-- // haven't crossed April yet — go one more year back
 	}
-	defer resp.Body.Close()
+	startDate := fmt.Sprintf("%d-04-01", fyStartYear)
+	endDate := now.Format("2006-01-02")
 
-	var result struct {
-		Status string `json:"status"`
-		Data   []struct {
-			OrderID         string  `json:"order_id"`
-			TradingSymbol   string  `json:"trading_symbol"`
-			Exchange        string  `json:"exchange"`
-			TransactionType string  `json:"transaction_type"`
-			Quantity        int     `json:"quantity"`
-			AveragePrice    float64 `json:"average_price"`
-			OrderTimestamp  string  `json:"order_timestamp"`
-			Product         string  `json:"product"`
-		} `json:"data"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-
-	var trades []models.Trade
 	connID := conn.ID
-	for _, t := range result.Data {
-		tradeTime, _ := time.Parse("2006-01-02 15:04:05", t.OrderTimestamp)
-		segment := classifySegment(t.Exchange, t.Product)
-		trades = append(trades, models.Trade{
-			ID:                 uuid.New(),
-			UserID:             userID,
-			BrokerConnectionID: &connID,
-			BrokerTradeID:      t.OrderID,
-			TradeDate:          tradeTime,
-			EntryTime:          tradeTime,
-			Instrument:         t.TradingSymbol,
-			Segment:            segment,
-			Direction:          t.TransactionType,
-			EntryPrice:         t.AveragePrice,
-			Quantity:           t.Quantity,
-			Source:             "oauth",
-		})
+	seen := make(map[string]bool)
+	var allTrades []models.Trade
+
+	for page := 1; page <= 500; page++ {
+		apiURL := fmt.Sprintf(
+			"https://api.upstox.com/v2/charges/historical-trades?start_date=%s&end_date=%s&page_number=%d&page_size=5000",
+			startDate, endDate, page,
+		)
+		req, err := http.NewRequest("GET", apiURL, nil)
+		if err != nil {
+			break
+		}
+		req.Header.Set("Authorization", "Bearer "+conn.AccessToken)
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			break
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			break
+		}
+
+		var result struct {
+			Status string `json:"status"`
+			Data   struct {
+				Trades     []upstoxHistoricalTrade `json:"trades"`
+				Pagination struct {
+					TotalPages int `json:"total_pages"`
+					TotalItems int `json:"total_items"`
+				} `json:"pagination"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(body, &result); err != nil || result.Status != "success" {
+			break
+		}
+		if len(result.Data.Trades) == 0 {
+			break
+		}
+
+		for _, t := range result.Data.Trades {
+			id := t.TradeID
+			if id == "" {
+				id = t.OrderRefID
+			}
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+
+			tradeDate, _ := time.Parse("2006-01-02", t.TradeDate)
+			seg := mapUpstoxSegment(t.Segment, t.Exchange)
+			instrType := mapUpstoxInstrumentType(t.SegmentInformation.InstrumentType, t.SegmentInformation.OptionType)
+			charges := t.Brokerage + t.TaxesCharges.Total
+
+			allTrades = append(allTrades, models.Trade{
+				ID:                 uuid.New(),
+				UserID:             userID,
+				BrokerConnectionID: &connID,
+				BrokerTradeID:      id,
+				TradeDate:          tradeDate,
+				EntryTime:          tradeDate,
+				Instrument:         t.TradingSymbol,
+				Segment:            seg,
+				InstrumentType:     instrType,
+				Direction:          strings.ToUpper(t.TransactionType),
+				EntryPrice:         t.Price,
+				Quantity:           t.Quantity,
+				Charges:            charges,
+				Source:             "oauth",
+			})
+		}
+
+		if page >= result.Data.Pagination.TotalPages {
+			break
+		}
 	}
-	return trades, nil
+	return allTrades, nil
+}
+
+func mapUpstoxSegment(segment, exchange string) string {
+	switch strings.ToUpper(segment) {
+	case "FO", "FNO":
+		return "FNO"
+	case "COM":
+		return "COMM"
+	case "CD":
+		return "CURR"
+	}
+	ex := strings.ToUpper(exchange)
+	if ex == "NFO" || ex == "BFO" {
+		return "FNO"
+	}
+	if ex == "MCX" {
+		return "COMM"
+	}
+	return "EQ"
+}
+
+func mapUpstoxInstrumentType(instrType, optionType string) string {
+	switch strings.ToUpper(instrType) {
+	case "FUT":
+		return "FUT"
+	case "OPT", "CE", "PE":
+		if strings.ToUpper(optionType) == "PE" {
+			return "PE"
+		}
+		return "CE"
+	}
+	return "EQ"
 }
 
 // dhanTrade mirrors the Dhan v2 trade history response fields.
