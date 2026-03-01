@@ -60,6 +60,27 @@ func main() {
 	// Health check
 	r.GET("/health", func(c *gin.Context) { c.JSON(200, gin.H{"status": "ok", "service": "tradeiq-gateway"}) })
 
+	// ── TEMP ADMIN: set user plan (remove after use) ──────
+	r.POST("/internal/admin/set-plan", func(c *gin.Context) {
+		var req struct {
+			Secret string `json:"secret"`
+			Email  string `json:"email"`
+			Plan   string `json:"plan"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()}); return
+		}
+		adminSecret := os.Getenv("ADMIN_SECRET")
+		if adminSecret == "" || req.Secret != adminSecret {
+			c.JSON(403, gin.H{"error": "forbidden"}); return
+		}
+		result := database.DB.Exec(`UPDATE users SET plan=? WHERE email=?`, req.Plan, req.Email)
+		if result.Error != nil {
+			c.JSON(500, gin.H{"error": result.Error.Error()}); return
+		}
+		c.JSON(200, gin.H{"rows_affected": result.RowsAffected, "email": req.Email, "plan": req.Plan})
+	})
+
 	// Demo (no auth)
 	r.GET("/api/v1/demo/analytics", analytics.GetDemoAnalytics)
 
