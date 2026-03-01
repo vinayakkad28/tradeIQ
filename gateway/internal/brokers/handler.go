@@ -734,20 +734,19 @@ func exchangeUpstox(cfg brokerConfig, code string) (string, string, *time.Time, 
 }
 
 func exchangeFyers(cfg brokerConfig, code string) (string, string, *time.Time, error) {
-	// Fyers: appIdHash = SHA256(appID-100 + ":" + secret + ":" + code)
+	// Fyers v3: appIdHash = SHA256(appID-100 + ":" + secret + ":" + auth_code)
 	appID := cfg.APIKey + "-100"
 	raw := fmt.Sprintf("%s:%s:%s", appID, cfg.APISecret, code)
 	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
+	log.Printf("[exchangeFyers] appID=%s secretLen=%d codeLen=%d hashPrefix=%s", appID, len(cfg.APISecret), len(code), checksum[:8])
 
 	payload := map[string]string{
-		"grant_type":  "authorization_code",
-		"appIdHash":   checksum,
-		"code":        code,
-		"client_id":   appID,
-		"secret_key":  cfg.APISecret,
-		"redirect_uri": cfg.RedirectURI,
+		"grant_type": "authorization_code",
+		"appIdHash":  checksum,
+		"code":       code,
 	}
 	body, _ := json.Marshal(payload)
+	log.Printf("[exchangeFyers] payload=%s", string(body)[:min(len(string(body)), 120)])
 
 	req, _ := http.NewRequest("POST", cfg.TokenURL, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -758,12 +757,15 @@ func exchangeFyers(cfg brokerConfig, code string) (string, string, *time.Time, e
 	}
 	defer resp.Body.Close()
 
+	respBytes, _ := io.ReadAll(resp.Body)
+	log.Printf("[exchangeFyers] status=%d body=%s", resp.StatusCode, string(respBytes))
+
 	var result struct {
 		AccessToken string `json:"access_token"`
 		S           string `json:"s"`
 		Message     string `json:"message"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(respBytes, &result); err != nil {
 		return "", "", nil, err
 	}
 	if result.S != "ok" {
