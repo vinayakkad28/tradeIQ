@@ -298,13 +298,41 @@ export default function BrokersPage() {
         </div>
       </div>
 
+      {/* ── AngelOne historical data notice (shown when AngelOne is connected) ── */}
+      {connections.some(c => c.broker_name === 'angelone') && (
+        <div className="terminal-card" style={{ borderColor: 'rgba(247,127,0,0.3)', background: 'rgba(247,127,0,0.04)' }}>
+          <div className="section-header"><span className="section-header-text" style={{ color: 'var(--color-amber-primary)' }}>AngelOne — Historical Data Limitation</span></div>
+          <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem', color: 'var(--color-text-muted)', lineHeight: 1.7, margin: '0.5rem 0 0.75rem' }}>
+            AngelOne SmartAPI only returns <strong style={{ color: 'var(--color-text-primary)' }}>today&apos;s trades</strong>. There is no API endpoint for historical trade data.
+            To import your full trade history, you must download a CSV from the AngelOne backoffice and upload it here.
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
+            {[
+              { step: '1', text: 'Open backoffice.angelone.in and log in with your AngelOne credentials.' },
+              { step: '2', text: 'Go to Reports → Trade Reports → select date range → click Download / Export.' },
+              { step: '3', text: 'Upload the downloaded CSV at Import Trades below — TradeIQ auto-detects the AngelOne format.' },
+            ].map(s => (
+              <div key={s.step} style={{ display: 'flex', gap: '0.75rem' }}>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: '1.1rem', fontWeight: 800, color: 'rgba(247,127,0,0.5)', flexShrink: 0, lineHeight: 1.2 }}>{s.step}</div>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: 'var(--color-text-muted)', lineHeight: 1.6 }}>{s.text}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: '0.75rem' }}>
+            <a href="/dashboard/upload" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--color-amber-primary)', textDecoration: 'underline' }}>
+              → Go to Import Trades
+            </a>
+          </div>
+        </div>
+      )}
+
       {/* ── How it works ── */}
       <div className="terminal-card-amber">
         <div className="section-header"><span className="section-header-text">How Broker Sync Works</span></div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
           {[
             { step: '01', title: 'OAuth Authorization', desc: 'Click Connect. You\'ll be redirected to your broker\'s site to authorize TradeIQ with read-only access to your trade history.' },
-            { step: '02', title: 'Auto Import', desc: 'TradeIQ pulls your last 6 months of trades. Auto-detects segment, instrument type, P&L, and timing.' },
+            { step: '02', title: 'Full History Import', desc: 'TradeIQ fetches your complete trade history — all available data since account opening. Dhan supports full history. AngelOne requires CSV for history beyond today.' },
             { step: '03', title: 'Daily Sync', desc: 'Trades sync automatically every morning at 6 AM IST. Or click Sync Now for immediate refresh.' },
           ].map(item => (
             <div key={item.step}>

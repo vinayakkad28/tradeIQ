@@ -1147,19 +1147,21 @@ type dhanTrade struct {
 }
 
 func fetchDhanTrades(conn models.BrokerConnection, _ brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
-	// Fetch up to 1 year of history using multiple 90-day windows.
-	// Dhan API allows max 90 days per request.
+	// Fetch ALL history in 90-day windows going backward from today.
+	// Stop after 2 consecutive empty windows (account start reached) or 120 windows (30 years max).
+	// Dhan API max window: 90 days per request.
 	connID := conn.ID
 	var allTrades []models.Trade
 	seen := make(map[string]bool)
 
 	now := time.Now()
-	// Four 90-day windows: 0–90, 90–180, 180–270, 270–365 days ago
-	for windowIdx := 0; windowIdx < 4; windowIdx++ {
+	consecutiveEmpty := 0
+	for windowIdx := 0; windowIdx < 120 && consecutiveEmpty < 2; windowIdx++ {
 		windowEnd := now.AddDate(0, 0, -windowIdx*90)
 		windowStart := now.AddDate(0, 0, -(windowIdx+1)*90)
 		toDate := windowEnd.Format("2006-01-02")
 		fromDate := windowStart.Format("2006-01-02")
+		windowHadTrades := false
 
 		for page := 0; page <= 50; page++ { // page 0-based; 50-page safety cap
 			apiURL := fmt.Sprintf("https://api.dhan.co/v2/trades/%s/%s/%d", fromDate, toDate, page)
@@ -1205,6 +1207,7 @@ func fetchDhanTrades(conn models.BrokerConnection, _ brokerConfig, userID uuid.U
 			if len(pageTrades) == 0 {
 				break // No more pages for this window
 			}
+			windowHadTrades = true
 
 			for _, t := range pageTrades {
 				// Prefer exchange trade ID for deduplication; fall back to order ID
@@ -1248,6 +1251,12 @@ func fetchDhanTrades(conn models.BrokerConnection, _ brokerConfig, userID uuid.U
 				})
 			}
 		} // end page loop
+
+		if windowHadTrades {
+			consecutiveEmpty = 0
+		} else {
+			consecutiveEmpty++
+		}
 	} // end window loop
 
 	return allTrades, nil
