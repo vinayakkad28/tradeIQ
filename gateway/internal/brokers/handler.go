@@ -400,8 +400,30 @@ func OAuthCallback(c *gin.Context) {
 		return
 	}
 
-	// ── Standard OAuth (Zerodha, Upstox, Fyers …) ──
+	// ── Zerodha: returns ?request_token= with no state param ──
+	// Zerodha never echoes state back; look up the most recent active Zerodha pending auth.
+	requestToken := c.Query("request_token")
+	if requestToken != "" {
+		var zeroState models.BrokerOAuthState
+		if err := database.DB.Where("broker_name = ? AND expires_at > ?", "zerodha", time.Now()).
+			Order("created_at DESC").First(&zeroState).Error; err != nil {
+			frontendBase := fallbackFrontend("")
+			c.Redirect(http.StatusFound, frontendBase+"/dashboard/brokers?error=session_expired&broker=zerodha")
+			return
+		}
+		frontendBase := fallbackFrontend(zeroState.FrontendURL)
+		redirectURL := fmt.Sprintf("%s/dashboard/brokers?code=%s&state=%s&broker=zerodha",
+			frontendBase, url.QueryEscape(requestToken), url.QueryEscape(zeroState.State))
+		c.Redirect(http.StatusFound, redirectURL)
+		return
+	}
+
+	// ── Standard OAuth (Upstox, Fyers …) ──
+	// Fyers uses ?auth_code= instead of ?code=
 	code := c.Query("code")
+	if code == "" {
+		code = c.Query("auth_code") // Fyers v3 callback param
+	}
 	state := c.Query("state")
 	broker := c.Query("broker")
 
@@ -814,6 +836,8 @@ func fetchBrokerTrades(conn models.BrokerConnection, cfg brokerConfig, userID uu
 		return fetchZerodhaTrades(conn, cfg, userID)
 	case "upstox":
 		return fetchUpstoxTrades(conn, cfg, userID)
+	case "fyers":
+		return fetchFyersTrades(conn, cfg, userID)
 	case "angelone":
 		return fetchAngelOneTrades(conn, cfg, userID)
 	case "dhan":
@@ -1081,6 +1105,134 @@ func fetchZerodhaTrades(conn models.BrokerConnection, cfg brokerConfig, userID u
 		})
 	}
 	return trades, nil
+}
+
+// ─────────────────────────────────────────────────────────
+// FYERS — TODAY'S TRADEBOOK (API returns current session only)
+// ─────────────────────────────────────────────────────────
+
+type fyersTradeRow struct {
+	ID            string  `json:"id"`
+	Symbol        string  `json:"symbol"`        // "NSE:RELIANCE-EQ"
+	Exchange      string  `json:"exchange"`       // "NSE", "BSE", "MCX"
+	Segment       string  `json:"segment"`        // "E"=equity, "D"=deriv, "C"=curr, "U"=comm
+	ProductType   string  `json:"productType"`    // "INTRADAY", "DELIVERY", "MARGIN"
+	Side          int     `json:"side"`           // 1=BUY, -1=SELL
+	TradedQty     int     `json:"tradedQty"`
+	TradePrice    float64 `json:"tradePrice"`
+	OrderDateTime string  `json:"orderDateTime"`  // "2024-01-15 09:15:00"
+	TradeNumber   string  `json:"tradeNumber"`
+	OrderID       string  `json:"orderID"`
+}
+
+func fetchFyersTrades(conn models.BrokerConnection, cfg brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
+	// Fyers Authorization header: "appId-100:accessToken"
+	appID := cfg.APIKey + "-100"
+	req, _ := http.NewRequest("GET", "https://api-t1.fyers.in/api/v3/tradebook", nil)
+	req.Header.Set("Authorization", appID+":"+conn.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fyers: http error: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("fyers: token expired (HTTP 401) — please reconnect")
+	}
+
+	var result struct {
+		S         string          `json:"s"`
+		Code      int             `json:"code"`
+		Message   string          `json:"message"`
+		TradeBook []fyersTradeRow `json:"tradeBook"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("fyers: decode error: %w", err)
+	}
+	if result.S != "ok" {
+		msg := strings.ToLower(result.Message)
+		if strings.Contains(msg, "no data") || strings.Contains(msg, "no trade") || len(result.TradeBook) == 0 {
+			return nil, nil // empty today — not an error
+		}
+		return nil, fmt.Errorf("fyers: API error: %s", result.Message)
+	}
+
+	connID := conn.ID
+	var trades []models.Trade
+	for _, t := range result.TradeBook {
+		direction := "BUY"
+		if t.Side == -1 {
+			direction = "SELL"
+		}
+		tradeTime, _ := time.Parse("2006-01-02 15:04:05", t.OrderDateTime)
+		if tradeTime.IsZero() {
+			tradeTime = time.Now()
+		}
+		// Strip exchange prefix: "NSE:RELIANCE-EQ" → "RELIANCE-EQ"
+		instrument := t.Symbol
+		if idx := strings.Index(t.Symbol, ":"); idx >= 0 {
+			instrument = t.Symbol[idx+1:]
+		}
+		// Dedup key: tradeNumber > id > orderID
+		tradeID := t.TradeNumber
+		if tradeID == "" {
+			tradeID = t.ID
+		}
+		if tradeID == "" {
+			tradeID = t.OrderID
+		}
+
+		rawJSON, _ := json.Marshal(t)
+		trades = append(trades, models.Trade{
+			ID:                 uuid.New(),
+			UserID:             userID,
+			BrokerConnectionID: &connID,
+			BrokerTradeID:      tradeID,
+			TradeDate:          tradeTime,
+			EntryTime:          tradeTime,
+			Instrument:         instrument,
+			Segment:            classifyFyersSegment(t.Segment, t.ProductType),
+			InstrumentType:     classifyFyersInstrumentType(t.Segment, instrument),
+			Direction:          direction,
+			EntryPrice:         t.TradePrice,
+			Quantity:           t.TradedQty,
+			Source:             "fyers",
+			RawData:            datatypes.JSON(rawJSON),
+		})
+	}
+	return trades, nil
+}
+
+func classifyFyersSegment(segment, productType string) string {
+	switch strings.ToUpper(segment) {
+	case "D":
+		return "FNO"
+	case "C":
+		return "CURR"
+	case "U":
+		return "COMM"
+	}
+	if strings.ToUpper(productType) == "INTRADAY" {
+		return "EQ_INTRADAY"
+	}
+	return "EQ"
+}
+
+func classifyFyersInstrumentType(segment, symbol string) string {
+	if strings.ToUpper(segment) == "D" {
+		upper := strings.ToUpper(symbol)
+		if strings.HasSuffix(upper, "CE") {
+			return "CE"
+		}
+		if strings.HasSuffix(upper, "PE") {
+			return "PE"
+		}
+		return "FUT"
+	}
+	return "EQ"
 }
 
 // upstoxHistoricalTrade mirrors the Upstox v2/charges/historical-trades response.
