@@ -3,6 +3,7 @@ import { useDateRange } from '@/context/DateRangeContext'
 import { useState, useEffect } from 'react'
 import { tradesAPI } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
+import { InfoTooltip } from '@/components/InfoTooltip'
 
 const EMOTION_EMOJI: Record<string, string> = {
   calm: '😌', confident: '💪', anxious: '😰', frustrated: '😤', bored: '😑', fomo: '🤑',
@@ -121,14 +122,16 @@ export default function JournalPage() {
       {/* Summary Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0.75rem' }}>
         {[
-          { label: 'Total Trades', value: insights.totalTrades, cls: 'data-value-amber' },
-          { label: 'Wins', value: insights.wins, cls: 'data-value-positive' },
-          { label: 'Losses', value: insights.losses, cls: 'data-value-negative' },
-          { label: 'Revenge Trades', value: insights.revengeTradeCount, cls: insights.revengeTradeCount > 0 ? 'data-value-negative' : 'data-value-positive' },
-          { label: 'Shown', value: filtered.length, cls: 'data-value-amber' },
+          { label: 'Total Trades', value: insights.totalTrades, cls: 'data-value-amber', tip: 'Total trades in the selected date range.' },
+          { label: 'Wins', value: insights.wins, cls: 'data-value-positive', tip: 'Trades with positive net P&L.' },
+          { label: 'Losses', value: insights.losses, cls: 'data-value-negative', tip: 'Trades with negative net P&L.' },
+          { label: 'Revenge Trades', value: insights.revengeTradeCount, cls: insights.revengeTradeCount > 0 ? 'data-value-negative' : 'data-value-positive', tip: 'Trades entered immediately after a losing trade — high-risk behavioral pattern.' },
+          { label: 'Shown', value: filtered.length, cls: 'data-value-amber', tip: 'Number of trades visible with current filter applied.' },
         ].map(s => (
           <div key={s.label} className="kpi-card">
-            <span className="data-label">{s.label}</span>
+            <span className="data-label" style={{ display: 'inline-flex', alignItems: 'center' }}>
+              {s.label}<InfoTooltip text={s.tip} />
+            </span>
             <span className={`data-value ${s.cls}`} style={{ fontSize: '1.5rem' }}>{s.value}</span>
           </div>
         ))}
@@ -160,9 +163,9 @@ export default function JournalPage() {
                 <th>Instrument</th>
                 <th className="col-number">Time</th>
                 <th className="col-number">P&L</th>
-                <th>Emotion</th>
-                <th>Setup</th>
-                <th>Flags</th>
+                <th style={{ whiteSpace: 'nowrap' }}>Emotion<InfoTooltip text="Self-tagged emotion at trade entry. Used to detect boredom/revenge patterns that hurt performance." /></th>
+                <th style={{ whiteSpace: 'nowrap' }}>Setup<InfoTooltip text="A = textbook high-confidence setup. B = decent but not perfect. C = low-conviction or chased entry." /></th>
+                <th style={{ whiteSpace: 'nowrap' }}>Flags<InfoTooltip text="Off-Plan: no pre-defined plan. SL Moved: stop adjusted after entry. Revenge: entered after a loss. Clean: none of the above." /></th>
                 <th></th>
               </tr>
             </thead>

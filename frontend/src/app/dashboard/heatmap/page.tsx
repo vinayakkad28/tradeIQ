@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { analyticsAPI } from '@/lib/api'
 import { useDateRange } from '@/context/DateRangeContext'
+import { InfoTooltip } from '@/components/InfoTooltip'
 
 type Cell = { label: string; pnl: number; trades: number; avgPnl: number }
 
@@ -62,12 +63,14 @@ export default function HeatmapPage() {
       {/* Summary strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
         {[
-          { label: 'Total P&L', value: `${totalPnL >= 0 ? '+' : ''}₹${totalPnL.toLocaleString('en-IN')}`, cls: totalPnL >= 0 ? 'data-value-positive' : 'data-value-negative' },
-          { label: 'Best Slot', value: bestCell ? `${bestCell.label} (+₹${bestCell.avgPnl.toFixed(0)} avg)` : '—', cls: 'data-value-amber' },
-          { label: 'Worst Slot', value: worstCell ? `${worstCell.label} (₹${worstCell.avgPnl.toFixed(0)} avg)` : '—', cls: 'data-value-negative' },
+          { label: 'Total P&L', value: `${totalPnL >= 0 ? '+' : ''}₹${totalPnL.toLocaleString('en-IN')}`, cls: totalPnL >= 0 ? 'data-value-positive' : 'data-value-negative', tip: 'Sum of all trade P&L for the selected dimension and time range.' },
+          { label: 'Best Slot', value: bestCell ? `${bestCell.label} (+₹${bestCell.avgPnl.toFixed(0)} avg)` : '—', cls: 'data-value-amber', tip: 'The hour/day/instrument with the highest average P&L per trade.' },
+          { label: 'Worst Slot', value: worstCell ? `${worstCell.label} (₹${worstCell.avgPnl.toFixed(0)} avg)` : '—', cls: 'data-value-negative', tip: 'The hour/day/instrument with the lowest average P&L per trade. Consider avoiding this slot.' },
         ].map(s => (
           <div key={s.label} className="terminal-card">
-            <div className="data-label">{s.label}</div>
+            <div className="data-label" style={{ display: 'inline-flex', alignItems: 'center' }}>
+              {s.label}<InfoTooltip text={s.tip} />
+            </div>
             <div className={`data-value ${s.cls}`} style={{ fontSize: '1rem', marginTop: '0.25rem' }}>{s.value}</div>
           </div>
         ))}
@@ -120,8 +123,12 @@ export default function HeatmapPage() {
                   <th>{tab === 'hour' ? 'Hour' : tab === 'day' ? 'Day' : 'Instrument'}</th>
                   <th>Trades</th>
                   <th>Total P&L</th>
-                  <th>Avg P&L</th>
-                  <th>Grade</th>
+                  <th style={{ whiteSpace: 'nowrap' }}>
+                    Avg P&L<InfoTooltip text="Average P&L per trade in this slot. More reliable than total P&L when trade counts differ across slots." />
+                  </th>
+                  <th style={{ whiteSpace: 'nowrap' }}>
+                    Grade<InfoTooltip text="EDGE: avg P&L > ₹500 (strong positive). OK: avg P&L > 0. AVOID: avg P&L < 0 (losing slot)." />
+                  </th>
                 </tr>
               </thead>
               <tbody>

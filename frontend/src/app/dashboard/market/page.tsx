@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
+import { InfoTooltip } from '@/components/InfoTooltip'
 
 const MARKET_BASE = process.env.NEXT_PUBLIC_API_URL?.replace('/api/v1', '') || 'http://localhost:8080'
 
@@ -134,7 +135,9 @@ export default function MarketPage() {
         </div>
         {vix && (
           <div style={{ textAlign: 'right' }}>
-            <div className="data-label">INDIA VIX</div>
+            <div className="data-label" style={{ display: 'inline-flex', alignItems: 'center' }}>
+              INDIA VIX<InfoTooltip text="Volatility Index based on NIFTY options prices. >20 = high fear/uncertainty. 15–20 = moderate. <15 = complacent market. High VIX = expensive options." />
+            </div>
             <div style={{
               fontFamily: 'var(--font-mono)', fontSize: '1.4rem', fontWeight: 800,
               color: (vix.vix ?? 0) > 20 ? 'var(--color-negative)' : (vix.vix ?? 0) > 15 ? 'var(--color-amber-primary)' : 'var(--color-positive)',
@@ -183,9 +186,13 @@ export default function MarketPage() {
       {/* FII/DII */}
       {fiiDii.length > 0 && (
         <div className="terminal-card">
-          <div className="section-header"><span className="section-header-text">FII / DII Activity</span></div>
+          <div className="section-header">
+            <span className="section-header-text" style={{ display: 'inline-flex', alignItems: 'center' }}>
+              FII / DII Activity<InfoTooltip text="Foreign & Domestic Institutional Investor net flows. Sustained FII selling = bearish pressure. DII usually buys when FII sells, cushioning the market." />
+            </span>
+          </div>
           <table className="terminal-table">
-            <thead><tr><th>Category</th><th>Buy (₹Cr)</th><th>Sell (₹Cr)</th><th>Net (₹Cr)</th></tr></thead>
+            <thead><tr><th>Category</th><th>Buy (₹Cr)</th><th>Sell (₹Cr)</th><th style={{ whiteSpace: 'nowrap' }}>Net (₹Cr)<InfoTooltip text="Net = Buy − Sell. Positive = net buyer (bullish). Negative = net seller (bearish pressure)." /></th></tr></thead>
             <tbody>
               {fiiDii.map((row, i) => (
                 <tr key={i}>
@@ -250,7 +257,10 @@ export default function MarketPage() {
 
         <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.5rem' }}>
           <div className="data-label">Underlying: <span style={{ color: 'var(--color-text-primary)', fontWeight: 700 }}>{underlying.toLocaleString('en-IN')}</span></div>
-          <div className="data-label">PCR (OI): <span style={{ color: pcrOI > 1.2 ? 'var(--color-positive)' : pcrOI < 0.8 ? 'var(--color-negative)' : 'var(--color-amber-primary)', fontWeight: 700 }}>{pcrOI.toFixed(2)}</span></div>
+          <div className="data-label" style={{ display: 'inline-flex', alignItems: 'center' }}>
+            PCR (OI)<InfoTooltip text="Put-Call Ratio by Open Interest. >1.2 = heavy put buying = bearish hedging (contrarian bullish signal). <0.8 = call heavy (bearish signal). ~1 = neutral." />
+            : <span style={{ color: pcrOI > 1.2 ? 'var(--color-positive)' : pcrOI < 0.8 ? 'var(--color-negative)' : 'var(--color-amber-primary)', fontWeight: 700, marginLeft: '0.25rem' }}>{pcrOI.toFixed(2)}</span>
+          </div>
         </div>
 
         {optLoading ? (
@@ -265,15 +275,15 @@ export default function MarketPage() {
             <table className="terminal-table" style={{ fontSize: '0.72rem' }}>
               <thead>
                 <tr>
-                  <th style={{ background: 'rgba(0,214,143,0.05)' }}>CE OI</th>
-                  <th style={{ background: 'rgba(0,214,143,0.05)' }}>CE Chg OI</th>
+                  <th style={{ background: 'rgba(0,214,143,0.05)', whiteSpace: 'nowrap' }}>CE OI<InfoTooltip text="Call Open Interest — total outstanding call contracts. High OI at a strike = resistance level." /></th>
+                  <th style={{ background: 'rgba(0,214,143,0.05)', whiteSpace: 'nowrap' }}>CE Chg OI<InfoTooltip text="Change in Call OI vs previous session. Rising OI with rising price = bullish. Rising OI with falling price = bearish." /></th>
                   <th style={{ background: 'rgba(0,214,143,0.05)' }}>CE LTP</th>
-                  <th style={{ background: 'rgba(0,214,143,0.05)' }}>CE IV</th>
+                  <th style={{ background: 'rgba(0,214,143,0.05)', whiteSpace: 'nowrap' }}>CE IV<InfoTooltip text="Call Implied Volatility — market's expectation of future volatility priced into the option. Higher IV = more expensive premium." /></th>
                   <th style={{ fontWeight: 800, color: 'var(--color-amber-primary)' }}>STRIKE</th>
-                  <th style={{ background: 'rgba(255,77,109,0.05)' }}>PE IV</th>
+                  <th style={{ background: 'rgba(255,77,109,0.05)', whiteSpace: 'nowrap' }}>PE IV<InfoTooltip text="Put Implied Volatility. PE IV > CE IV (IV skew) signals fear of downside. Used to gauge market sentiment." /></th>
                   <th style={{ background: 'rgba(255,77,109,0.05)' }}>PE LTP</th>
-                  <th style={{ background: 'rgba(255,77,109,0.05)' }}>PE Chg OI</th>
-                  <th style={{ background: 'rgba(255,77,109,0.05)' }}>PE OI</th>
+                  <th style={{ background: 'rgba(255,77,109,0.05)', whiteSpace: 'nowrap' }}>PE Chg OI<InfoTooltip text="Change in Put OI. Rising put OI with falling price = bearish. Rising put OI with rising price = short covering (bullish)." /></th>
+                  <th style={{ background: 'rgba(255,77,109,0.05)', whiteSpace: 'nowrap' }}>PE OI<InfoTooltip text="Put Open Interest. High OI at a strike = support level (max pain theory)." /></th>
                 </tr>
               </thead>
               <tbody>

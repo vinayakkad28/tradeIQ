@@ -1,6 +1,7 @@
 'use client'
 import Link from 'next/link'
 import { useDateRange } from '@/context/DateRangeContext'
+import { InfoTooltip } from '@/components/InfoTooltip'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell,
@@ -101,16 +102,18 @@ export default function DashboardOverview() {
       {/* KPI Row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0.75rem' }}>
         {[
-          { label: 'Net P&L', value: fmt(totalPnl), cls: pnlPos ? 'data-value-positive' : 'data-value-negative' },
-          { label: 'Win Rate', value: `${winRate.toFixed(1)}%`, cls: winRate >= 55 ? 'data-value-positive' : 'data-value-amber' },
-          { label: 'Expectancy', value: `₹${expectancy.toFixed(0)}`, cls: expectancy >= 0 ? 'data-value-positive' : 'data-value-negative' },
-          { label: 'Profit Factor', value: profitFactor.toFixed(2), cls: profitFactor >= 1.5 ? 'data-value-positive' : profitFactor >= 1 ? 'data-value-amber' : 'data-value-negative' },
-          { label: 'Avg Win', value: `₹${avgWin.toFixed(0)}`, cls: 'data-value-positive' },
-          { label: 'Avg Loss', value: `-₹${avgLoss.toFixed(0)}`, cls: 'data-value-negative' },
-          { label: 'Max Drawdown', value: `₹${maxDrawdown.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, cls: 'data-value-negative' },
+          { label: 'Net P&L', value: fmt(totalPnl), cls: pnlPos ? 'data-value-positive' : 'data-value-negative', tip: 'Sum of all closed trade P&L in the selected period.' },
+          { label: 'Win Rate', value: `${winRate.toFixed(1)}%`, cls: winRate >= 55 ? 'data-value-positive' : 'data-value-amber', tip: '% of trades with positive P&L. Formula: Wins ÷ Total Trades × 100.' },
+          { label: 'Expectancy', value: `₹${expectancy.toFixed(0)}`, cls: expectancy >= 0 ? 'data-value-positive' : 'data-value-negative', tip: 'Avg P&L per trade placed repeatedly. Formula: (Win Rate × Avg Win) − (Loss Rate × Avg Loss). Positive = edge.' },
+          { label: 'Profit Factor', value: profitFactor.toFixed(2), cls: profitFactor >= 1.5 ? 'data-value-positive' : profitFactor >= 1 ? 'data-value-amber' : 'data-value-negative', tip: 'Gross profit ÷ gross loss. >1.5 is good, >2 is excellent, <1 means net negative.' },
+          { label: 'Avg Win', value: `₹${avgWin.toFixed(0)}`, cls: 'data-value-positive', tip: 'Average P&L of winning trades only.' },
+          { label: 'Avg Loss', value: `-₹${avgLoss.toFixed(0)}`, cls: 'data-value-negative', tip: 'Average loss magnitude of losing trades. Lower is better.' },
+          { label: 'Max Drawdown', value: `₹${maxDrawdown.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, cls: 'data-value-negative', tip: 'Largest peak-to-trough equity drop. Formula: max(peak cumulative P&L − current cumulative P&L).' },
         ].map(kpi => (
           <div key={kpi.label} className="kpi-card">
-            <span className="data-label">{kpi.label}</span>
+            <span className="data-label" style={{ display: 'inline-flex', alignItems: 'center' }}>
+              {kpi.label}<InfoTooltip text={kpi.tip} />
+            </span>
             <span className={`data-value ${kpi.cls}`} style={{ fontSize: '1.1rem' }}>{kpi.value}</span>
           </div>
         ))}
@@ -120,7 +123,11 @@ export default function DashboardOverview() {
       <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: '0.75rem' }}>
         {/* IQ Score */}
         <div className="terminal-card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          <div className="section-header"><span className="section-header-text">TradeIQ Score</span></div>
+          <div className="section-header">
+            <span className="section-header-text" style={{ display: 'inline-flex', alignItems: 'center' }}>
+              TradeIQ Score<InfoTooltip text="Composite score (0–100): Win Rate 30% + Plan Discipline 30% + Risk Mgmt 20% + Consistency 20%." />
+            </span>
+          </div>
           <div style={{ textAlign: 'center' }}>
             <div className="data-value-xl" style={{
               color: iqScore >= 70 ? 'var(--color-positive)' : iqScore >= 50 ? 'var(--color-amber-primary)' : 'var(--color-negative)',
@@ -129,14 +136,16 @@ export default function DashboardOverview() {
             <div className="data-label" style={{ marginTop: '0.25rem' }}>out of 100</div>
           </div>
           {[
-            { label: 'Win Rate', score: iqBreakdown.winRateScore, color: 'var(--color-positive)' },
-            { label: 'Discipline', score: iqBreakdown.disciplineScore, color: 'var(--color-accent-indigo)' },
-            { label: 'Risk Mgmt', score: iqBreakdown.riskScore, color: 'var(--color-amber-primary)' },
-            { label: 'Consistency', score: iqBreakdown.consistencyScore, color: 'var(--color-accent-cyan)' },
+            { label: 'Win Rate', score: iqBreakdown.winRateScore, color: 'var(--color-positive)', tip: 'Win Rate × 1.5, capped at 100. Weight: 30% of IQ Score.' },
+            { label: 'Discipline', score: iqBreakdown.disciplineScore, color: 'var(--color-accent-indigo)', tip: '% of trades where you followed your pre-defined plan. Weight: 30% of IQ Score.' },
+            { label: 'Risk Mgmt', score: iqBreakdown.riskScore, color: 'var(--color-amber-primary)', tip: '100 if zero SL moves. Penalised 2pts per SL move as % of total trades. Weight: 20%.' },
+            { label: 'Consistency', score: iqBreakdown.consistencyScore, color: 'var(--color-accent-cyan)', tip: 'Based on Profit Factor: ≥1.5→100, ≥1.0→70, else 40. Weight: 20% of IQ Score.' },
           ].map(item => (
             <div key={item.label} style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span className="data-label">{item.label}</span>
+                <span className="data-label" style={{ display: 'inline-flex', alignItems: 'center' }}>
+                  {item.label}<InfoTooltip text={item.tip} />
+                </span>
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-text-secondary)' }}>{item.score.toFixed(0)}</span>
               </div>
               <div className="progress-track">
@@ -178,15 +187,17 @@ export default function DashboardOverview() {
           <div className="section-header"><span className="section-header-text">Behavioral Flags</span></div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
             {[
-              { label: 'Revenge Trades', value: revengeTradeCount, severity: revengeTradeCount > 3 ? 'red' : revengeTradeCount > 0 ? 'amber' : 'green', icon: '⚠' },
-              { label: 'SL Moved', value: stopLossMovedCount, severity: stopLossMovedCount > 3 ? 'red' : stopLossMovedCount > 0 ? 'amber' : 'green', icon: '↕' },
-              { label: 'Boredom Trades', value: boredomTradeCount, severity: boredomTradeCount > 3 ? 'red' : boredomTradeCount > 0 ? 'amber' : 'green', icon: '⊘' },
-              { label: 'Plan Compliance', value: `${planComplianceRate.toFixed(0)}%`, severity: planComplianceRate >= 75 ? 'green' : planComplianceRate >= 50 ? 'amber' : 'red', icon: '✓' },
+              { label: 'Revenge Trades', value: revengeTradeCount, severity: revengeTradeCount > 3 ? 'red' : revengeTradeCount > 0 ? 'amber' : 'green', icon: '⚠', tip: 'Trades entered immediately after a losing trade. Statistically negative expectancy — avoid.' },
+              { label: 'SL Moved', value: stopLossMovedCount, severity: stopLossMovedCount > 3 ? 'red' : stopLossMovedCount > 0 ? 'amber' : 'green', icon: '↕', tip: 'Trades where stop loss was adjusted after entry — signals emotional decision-making.' },
+              { label: 'Boredom Trades', value: boredomTradeCount, severity: boredomTradeCount > 3 ? 'red' : boredomTradeCount > 0 ? 'amber' : 'green', icon: '⊘', tip: "Trades tagged with 'bored' emotion. Often lack a clear setup and have poor expectancy." },
+              { label: 'Plan Compliance', value: `${planComplianceRate.toFixed(0)}%`, severity: planComplianceRate >= 75 ? 'green' : planComplianceRate >= 50 ? 'amber' : 'red', icon: '✓', tip: '% of trades where followed_plan = true. Below 70% indicates reactive, unstructured trading.' },
             ].map(flag => (
               <div key={flag.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.75rem', background: 'var(--color-bg-secondary)', borderRadius: 3 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>{flag.icon}</span>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>{flag.label}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--color-text-secondary)', display: 'inline-flex', alignItems: 'center' }}>
+                    {flag.label}<InfoTooltip text={flag.tip} />
+                  </span>
                 </div>
                 <span className={`badge badge-${flag.severity === 'red' ? 'red' : flag.severity === 'amber' ? 'amber' : 'green'}`}>{flag.value}</span>
               </div>

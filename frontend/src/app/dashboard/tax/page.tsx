@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { useDateRange } from '@/context/DateRangeContext'
+import { InfoTooltip } from '@/components/InfoTooltip'
 
 type TaxCategory = 'intraday_eq' | 'stcg' | 'ltcg' | 'fno'
 
@@ -175,12 +176,12 @@ export default function TaxPage() {
         <div style={{ marginTop: '1rem' }}>
           <div className="data-label-amber" style={{ marginBottom: '0.5rem' }}>Trading Income (from your trades)</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
-            <InputField label="Intraday Equity P&L (₹)" value={intradayPnL} onChange={setIntradayPnL} />
-            <InputField label="STCG — Short-Term Equity P&L (₹)" value={stcgPnL} onChange={setStcgPnL} />
-            <InputField label="LTCG — Long-Term Equity P&L (₹)" value={ltcgPnL} onChange={setLtcgPnL} />
-            <InputField label="F&O Net P&L (₹)" value={fnoPnL} onChange={setFnoPnL} hint="Use negative for loss" />
-            <InputField label="Approximate Turnover (₹)" value={turnover} onChange={setTurnover} hint="Total buy+sell value" />
-            <InputField label="Brokerage + Charges (₹)" value={brokerage} onChange={setBrokerage} />
+            <InputField label="Intraday Equity P&L (₹)" value={intradayPnL} onChange={setIntradayPnL} tooltip="Speculative Business Income — taxed at slab rate. Can only offset against other speculative gains." />
+            <InputField label="STCG — Short-Term Equity P&L (₹)" value={stcgPnL} onChange={setStcgPnL} tooltip="Equity held <12 months. Flat 20% tax (Finance Act 2024, was 15% pre-Jul 2024)." />
+            <InputField label="LTCG — Long-Term Equity P&L (₹)" value={ltcgPnL} onChange={setLtcgPnL} tooltip="Equity held >12 months. First ₹1.25L exempt per year. 12.5% on gains above that." />
+            <InputField label="F&O Net P&L (₹)" value={fnoPnL} onChange={setFnoPnL} hint="Use negative for loss" tooltip="Non-Speculative Business Income — can offset other business income. Brokerage & expenses deductible." />
+            <InputField label="Approximate Turnover (₹)" value={turnover} onChange={setTurnover} hint="Total buy+sell value" tooltip="Total absolute buy + sell value. Turnover >₹10Cr triggers mandatory 44AB tax audit." />
+            <InputField label="Brokerage + Charges (₹)" value={brokerage} onChange={setBrokerage} tooltip="Total brokerage + STT + exchange fees paid. Deductible: 30% against intraday income, 70% against F&O income." />
           </div>
         </div>
       </div>
@@ -190,12 +191,14 @@ export default function TaxPage() {
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
             {[
-              { label: 'Total Tax (before cess)', value: `₹${totalTax.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, cls: 'data-value-negative' },
-              { label: 'Surcharge + 4% Cess', value: `₹${(totalSurcharge + cess).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, cls: 'data-value-amber' },
-              { label: 'Total Tax Payable', value: `₹${totalTaxFinal.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, cls: 'data-value-negative' },
+              { label: 'Total Tax (before cess)', value: `₹${totalTax.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, cls: 'data-value-negative', tip: 'Sum of tax across all income categories, before adding surcharge and cess.' },
+              { label: 'Surcharge + 4% Cess', value: `₹${(totalSurcharge + cess).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, cls: 'data-value-amber', tip: 'Health & Education Cess: 4% on total tax. Surcharge applies if income >₹50L (7%), >₹1Cr (12%), >₹2Cr (15%).' },
+              { label: 'Total Tax Payable', value: `₹${totalTaxFinal.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, cls: 'data-value-negative', tip: 'Final tax liability = Tax + Surcharge + 4% Cess. This is the amount due at ITR filing.' },
             ].map(s => (
               <div key={s.label} className="terminal-card">
-                <div className="data-label">{s.label}</div>
+                <div className="data-label" style={{ display: 'inline-flex', alignItems: 'center' }}>
+                  {s.label}<InfoTooltip text={s.tip} />
+                </div>
                 <div className={`data-value ${s.cls}`} style={{ fontSize: '1.1rem', marginTop: '0.25rem' }}>{s.value}</div>
               </div>
             ))}
@@ -257,10 +260,14 @@ export default function TaxPage() {
   )
 }
 
-function InputField({ label, value, onChange, hint }: { label: string; value: number; onChange: (v: number) => void; hint?: string }) {
+function InputField({ label, value, onChange, hint, tooltip }: { label: string; value: number; onChange: (v: number) => void; hint?: string; tooltip?: string }) {
   return (
     <div>
-      <div className="data-label-amber">{label}{hint && <span style={{ color: 'var(--color-text-muted)', fontSize: '0.65rem', marginLeft: '0.3rem' }}>({hint})</span>}</div>
+      <div className="data-label-amber" style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.2rem' }}>
+        {label}
+        {tooltip && <InfoTooltip text={tooltip} />}
+        {hint && <span style={{ color: 'var(--color-text-muted)', fontSize: '0.65rem', marginLeft: '0.2rem' }}>({hint})</span>}
+      </div>
       <input
         type="number"
         value={value || ''}

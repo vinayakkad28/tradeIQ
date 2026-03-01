@@ -43,9 +43,18 @@ function OAuthCallbackHandler({ onMessage, onRefresh, isAuthenticated }: {
     if (code && state && broker && isAuthenticated) {
       const feedToken = searchParams.get('feed_token') ?? ''
       brokerAPI.callbackWithFeed(broker, code, state, feedToken)
-        .then(() => {
+        .then(async (res) => {
+          const connId = res.data.connection?.id
           onMessage(`${broker} connected! Importing your trades...`, true)
           onRefresh()
+          if (connId) {
+            try {
+              const syncRes = await brokerAPI.sync(connId)
+              const count = syncRes.data.trades_synced ?? syncRes.data.data?.trades_synced ?? 0
+              onMessage(`${broker} connected! Imported ${count} trade(s).`, true)
+              onRefresh()
+            } catch { /* sync error — user can click Sync Now */ }
+          }
         })
         .catch(err => {
           onMessage(err?.response?.data?.message || 'OAuth token exchange failed. Please try again.', false)
