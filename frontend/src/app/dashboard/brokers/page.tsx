@@ -5,11 +5,11 @@ import { brokerAPI } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
 
 const SUPPORTED_BROKERS = [
-  { id: 'zerodha',  name: 'Zerodha',   description: 'Kite API — OAuth 2.0',     logo: 'Z', color: '#387ed1' },
-  { id: 'upstox',   name: 'Upstox',    description: 'Upstox Pro API v2',         logo: 'U', color: '#7ac231' },
-  { id: 'angelone', name: 'AngelOne',  description: 'SmartAPI — OAuth 2.0',      logo: 'A', color: '#f77f00' },
-  { id: 'fyers',    name: 'Fyers',     description: 'Fyers API v3',              logo: 'F', color: '#1e6fd9' },
-  { id: 'dhan',     name: 'Dhan',      description: 'Dhan HQ v2 — OAuth 2.0',    logo: 'D', color: '#6d2bff' },
+  { id: 'zerodha',  name: 'Zerodha',  description: 'Kite API — OAuth 2.0',   logo: 'Z', color: '#387ed1' },
+  { id: 'upstox',   name: 'Upstox',   description: 'Upstox Pro API v2',       logo: 'U', color: '#7ac231' },
+  { id: 'angelone', name: 'AngelOne', description: 'SmartAPI — OAuth 2.0',    logo: 'A', color: '#f77f00' },
+  { id: 'fyers',    name: 'Fyers',    description: 'Fyers API v3',            logo: 'F', color: '#1e6fd9' },
+  { id: 'dhan',     name: 'Dhan',     description: 'Dhan HQ v2 — OAuth 2.0', logo: 'D', color: '#6d2bff' },
 ]
 
 type Connection = {
@@ -21,22 +21,22 @@ type Connection = {
   trade_count: number
 }
 
-// Separate component so useSearchParams() is inside a Suspense boundary
+// Handles the ?code=&state=&broker= params that arrive after OAuth redirect
 function OAuthCallbackHandler({ onMessage, onRefresh, isAuthenticated }: {
-  onMessage: (msg: string) => void
+  onMessage: (msg: string, ok?: boolean) => void
   onRefresh: () => void
   isAuthenticated: boolean
 }) {
   const searchParams = useSearchParams()
 
   useEffect(() => {
-    const code = searchParams.get('code')
-    const state = searchParams.get('state')
+    const code   = searchParams.get('code')
+    const state  = searchParams.get('state')
     const broker = searchParams.get('broker')
-    const error = searchParams.get('error')
+    const error  = searchParams.get('error')
 
     if (error) {
-      onMessage(`OAuth failed: ${error}. Please try again.`)
+      onMessage(`OAuth failed: ${error}. Please try again.`, false)
       return
     }
 
@@ -44,12 +44,13 @@ function OAuthCallbackHandler({ onMessage, onRefresh, isAuthenticated }: {
       const feedToken = searchParams.get('feed_token') ?? ''
       brokerAPI.callbackWithFeed(broker, code, state, feedToken)
         .then(() => {
-          onMessage(`${broker} connected successfully! Fetching your trades...`)
+          onMessage(`${broker} connected! Importing your trades...`, true)
           onRefresh()
         })
         .catch(err => {
-          onMessage(err?.response?.data?.message || 'OAuth token exchange failed. Please try again.')
+          onMessage(err?.response?.data?.message || 'OAuth token exchange failed. Please try again.', false)
         })
+      // Clear URL params immediately so a page refresh doesn't re-trigger
       window.history.replaceState({}, '', '/dashboard/brokers')
     }
   }, [isAuthenticated]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -60,11 +61,16 @@ function OAuthCallbackHandler({ onMessage, onRefresh, isAuthenticated }: {
 export default function BrokersPage() {
   const { isAuthenticated } = useAuth()
   const [connections, setConnections] = useState<Connection[]>([])
-  const [connecting, setConnecting] = useState<string | null>(null)
-  const [syncing, setSyncing] = useState<string | null>(null)
+  const [connecting, setConnecting]   = useState<string | null>(null)
+  const [syncing, setSyncing]         = useState<string | null>(null)
   const [disconnecting, setDisconnecting] = useState<string | null>(null)
-  const [syncMessage, setSyncMessage] = useState<string | null>(null)
+  const [message, setMessage]         = useState<{ text: string; ok: boolean } | null>(null)
   const [loadingList, setLoadingList] = useState(true)
+
+  const showMessage = (text: string, ok = true) => {
+    setMessage({ text, ok })
+    setTimeout(() => setMessage(null), 5000)
+  }
 
   const fetchConnections = async () => {
     if (!isAuthenticated) { setLoadingList(false); return }
@@ -78,18 +84,11 @@ export default function BrokersPage() {
     }
   }
 
-  const handleOAuthMessage = (msg: string) => {
-    setSyncMessage(msg)
-    setTimeout(() => setSyncMessage(null), 5000)
-  }
-
   useEffect(() => { fetchConnections() }, [isAuthenticated]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Initiate OAuth connect (or reconnect for expired)
   const handleConnect = async (brokerId: string) => {
-    if (!isAuthenticated) {
-      window.location.href = '/login'
-      return
-    }
+    if (!isAuthenticated) { window.location.href = '/login'; return }
     setConnecting(brokerId)
     try {
       const res = await brokerAPI.connect(brokerId)
@@ -97,12 +96,10 @@ export default function BrokersPage() {
       if (oauthUrl && oauthUrl !== '#') {
         window.location.href = oauthUrl
       } else {
-        setSyncMessage(`OAuth flow for ${brokerId} is coming soon. Use CSV import for now.`)
-        setTimeout(() => setSyncMessage(null), 4000)
+        showMessage(`OAuth for ${brokerId} is coming soon. Use CSV import for now.`, false)
       }
     } catch {
-      setSyncMessage('Connection failed. Please try again.')
-      setTimeout(() => setSyncMessage(null), 3000)
+      showMessage('Connection failed. Please try again.', false)
     } finally {
       setConnecting(null)
     }
@@ -110,54 +107,65 @@ export default function BrokersPage() {
 
   const handleSync = async (connId: string) => {
     setSyncing(connId)
-    setSyncMessage(null)
     try {
       const res = await brokerAPI.sync(connId)
       const count = res.data.trades_synced ?? res.data.data?.trades_synced ?? 0
-      setSyncMessage(`Synced ${count} new trade(s) successfully.`)
+      showMessage(`Synced ${count} new trade(s).`)
       fetchConnections()
-    } catch {
-      setSyncMessage('Sync failed. Please try again.')
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message ?? 'Sync failed.'
+      showMessage(msg, false)
     } finally {
       setSyncing(null)
-      setTimeout(() => setSyncMessage(null), 4000)
     }
   }
 
-  const handleDisconnect = async (connId: string) => {
-    if (!confirm('Disconnect this broker? Imported trades will be kept.')) return
+  const handleDisconnect = async (connId: string, brokerName: string) => {
+    if (!confirm(`Disconnect ${brokerName}? Your imported trades will be kept.`)) return
     setDisconnecting(connId)
     try {
       await brokerAPI.disconnect(connId)
       setConnections(cs => cs.filter(c => c.id !== connId))
+      showMessage(`${brokerName} disconnected.`)
     } catch {
-      setSyncMessage('Disconnect failed. Please try again.')
+      showMessage('Disconnect failed. Please try again.', false)
     } finally {
       setDisconnecting(null)
     }
   }
 
+  // A broker is "fully connected" only if status === 'connected'
+  const fullyConnected = (brokerId: string) =>
+    connections.some(c => c.broker_name === brokerId && c.status === 'connected')
+
   return (
     <div className="page-enter" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
 
-      {/* OAuth callback handler — must be inside Suspense for useSearchParams */}
+      {/* OAuth callback handler — needs Suspense for useSearchParams */}
       <Suspense fallback={null}>
         <OAuthCallbackHandler
-          onMessage={handleOAuthMessage}
+          onMessage={showMessage}
           onRefresh={fetchConnections}
           isAuthenticated={isAuthenticated}
         />
       </Suspense>
 
-      {/* Connected Accounts */}
+      {/* Status message */}
+      {message && (
+        <div style={{
+          padding: '0.625rem 0.875rem', borderRadius: 4,
+          fontFamily: 'var(--font-mono)', fontSize: '0.75rem',
+          background: message.ok ? 'rgba(0,214,143,0.08)' : 'rgba(255,77,109,0.08)',
+          border: `1px solid ${message.ok ? 'rgba(0,214,143,0.2)' : 'rgba(255,77,109,0.2)'}`,
+          color: message.ok ? 'var(--color-positive)' : 'var(--color-negative)',
+        }}>
+          {message.text}
+        </div>
+      )}
+
+      {/* ── Connected Accounts ── */}
       <div>
         <div className="section-header"><span className="section-header-text">Connected Accounts</span></div>
-
-        {syncMessage && (
-          <div style={{ marginBottom: '0.75rem', padding: '0.625rem 0.875rem', background: 'rgba(0,214,143,0.08)', border: '1px solid rgba(0,214,143,0.2)', borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--color-positive)' }}>
-            {syncMessage}
-          </div>
-        )}
 
         {loadingList ? (
           <div className="terminal-card" style={{ textAlign: 'center', padding: '2rem' }}>
@@ -172,35 +180,56 @@ export default function BrokersPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {connections.map(conn => {
               const broker = SUPPORTED_BROKERS.find(b => b.id === conn.broker_name)
+              const isExpired = conn.status !== 'connected'
               return (
-                <div key={conn.id} className="terminal-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div key={conn.id} className="terminal-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 6, background: broker?.color || '#333', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: '0.9rem', color: '#fff' }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 6, background: broker?.color || '#333', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: '0.9rem', color: '#fff', flexShrink: 0 }}>
                       {broker?.logo ?? conn.broker_name.slice(0, 1).toUpperCase()}
                     </div>
                     <div>
-                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>{conn.display_name || conn.broker_name}</div>
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                        {conn.display_name || broker?.name || conn.broker_name}
+                      </div>
                       <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--color-text-muted)' }}>
                         {conn.last_synced_at
-                          ? `Last sync: ${new Date(conn.last_synced_at).toLocaleDateString('en-IN')} · `
+                          ? `Last sync: ${new Date(conn.last_synced_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} · `
                           : 'Never synced · '}
                         {conn.trade_count} trades imported
                       </div>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <span className={`badge ${conn.status === 'connected' ? 'badge-green' : 'badge-red'}`}>{conn.status.toUpperCase()}</span>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
+                    <span className={`badge ${conn.status === 'connected' ? 'badge-green' : 'badge-red'}`}>
+                      {conn.status.toUpperCase()}
+                    </span>
+
+                    {isExpired ? (
+                      // Token expired / error → show Reconnect button
+                      <button
+                        className="btn-primary"
+                        onClick={() => handleConnect(conn.broker_name)}
+                        disabled={connecting === conn.broker_name}
+                        style={{ fontSize: '0.75rem' }}
+                      >
+                        {connecting === conn.broker_name ? 'Connecting...' : '⟳ Reconnect'}
+                      </button>
+                    ) : (
+                      <button
+                        className="btn-ghost"
+                        onClick={() => handleSync(conn.id)}
+                        disabled={syncing === conn.id}
+                        style={{ fontSize: '0.75rem' }}
+                      >
+                        {syncing === conn.id ? 'Syncing...' : '⇌ Sync Now'}
+                      </button>
+                    )}
+
                     <button
                       className="btn-ghost"
-                      onClick={() => handleSync(conn.id)}
-                      disabled={syncing === conn.id}
-                    >
-                      {syncing === conn.id ? 'Syncing...' : '⇌ Sync Now'}
-                    </button>
-                    <button
-                      className="btn-ghost"
-                      style={{ color: 'var(--color-negative)', borderColor: 'rgba(255,77,109,0.2)' }}
-                      onClick={() => handleDisconnect(conn.id)}
+                      style={{ color: 'var(--color-negative)', borderColor: 'rgba(255,77,109,0.2)', fontSize: '0.75rem' }}
+                      onClick={() => handleDisconnect(conn.id, broker?.name ?? conn.broker_name)}
                       disabled={disconnecting === conn.id}
                     >
                       {disconnecting === conn.id ? 'Removing...' : 'Disconnect'}
@@ -213,12 +242,13 @@ export default function BrokersPage() {
         )}
       </div>
 
-      {/* Add Connection */}
+      {/* ── Add / Reconnect Broker ── */}
       <div>
         <div className="section-header"><span className="section-header-text">Add Broker Connection</span></div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
           {SUPPORTED_BROKERS.map(broker => {
-            const isConnected = connections.some(c => c.broker_name === broker.id)
+            const existingConn = connections.find(c => c.broker_name === broker.id)
+            const isFullyConnected = fullyConnected(broker.id)
             return (
               <div key={broker.id} className="terminal-card" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -230,8 +260,19 @@ export default function BrokersPage() {
                     <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--color-text-muted)' }}>{broker.description}</div>
                   </div>
                 </div>
-                {isConnected ? (
+
+                {isFullyConnected ? (
                   <span className="badge badge-green" style={{ alignSelf: 'flex-start' }}>CONNECTED</span>
+                ) : existingConn ? (
+                  // Connection exists but token expired — show Reconnect
+                  <button
+                    className="btn-primary"
+                    onClick={() => handleConnect(broker.id)}
+                    disabled={connecting === broker.id}
+                    style={{ width: '100%', justifyContent: 'center', fontSize: '0.78rem' }}
+                  >
+                    {connecting === broker.id ? 'Connecting...' : `⟳ Reconnect ${broker.name}`}
+                  </button>
                 ) : (
                   <button
                     className="btn-primary"
@@ -248,7 +289,7 @@ export default function BrokersPage() {
         </div>
       </div>
 
-      {/* Info */}
+      {/* ── How it works ── */}
       <div className="terminal-card-amber">
         <div className="section-header"><span className="section-header-text">How Broker Sync Works</span></div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
