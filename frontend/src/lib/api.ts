@@ -57,8 +57,16 @@ export const authAPI = {
 
 export const userAPI = {
   me: () => api.get('/users/me'),
-  update: (data: { full_name?: string; onboarding_done?: boolean }) =>
-    api.patch('/users/me', data),
+  update: (data: {
+    full_name?: string
+    phone_number?: string
+    trading_experience?: string
+    trading_style?: string
+    avatar_color?: string
+    onboarding_done?: boolean
+  }) => api.patch('/users/me', data),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    api.post('/users/change-password', { current_password: currentPassword, new_password: newPassword }),
 }
 
 // ── BROKERS ─────────────────────────────────────────────

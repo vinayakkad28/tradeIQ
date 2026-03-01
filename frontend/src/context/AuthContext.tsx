@@ -9,6 +9,10 @@ export interface User {
   id: string
   email: string
   full_name: string
+  phone_number: string
+  trading_experience: 'beginner' | 'intermediate' | 'advanced' | 'professional'
+  trading_style: 'scalper' | 'intraday' | 'swing' | 'positional'
+  avatar_color: 'amber' | 'green' | 'blue' | 'purple' | 'red'
   plan: 'free' | 'trader' | 'pro'
   onboarding_done: boolean
   created_at: string

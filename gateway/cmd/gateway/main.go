@@ -95,6 +95,7 @@ func main() {
 		// Users
 		protected.GET("users/me", users.GetMe)
 		protected.PATCH("users/me", users.UpdateMe)
+		protected.POST("users/change-password", users.ChangePassword)
 
 		// Brokers
 		protected.GET("users/me/brokers", brokers.ListBrokers)

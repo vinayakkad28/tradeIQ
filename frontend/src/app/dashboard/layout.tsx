@@ -1,7 +1,7 @@
 'use client'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { DateRangeProvider, useDateRange, DateRange } from '@/context/DateRangeContext'
 import { useAuth } from '@/context/AuthContext'
 
@@ -50,23 +50,145 @@ const RANGES: { label: string; value: DateRange }[] = [
   { label: 'ALL', value: 'all' },
 ]
 
-function DashboardHeader() {
-  const { range, setRange, insights, isLoading, hasRealData } = useDateRange()
+const AVATAR_COLOR_MAP: Record<string, string> = {
+  amber:  '#f59e0b',
+  green:  '#00d68f',
+  blue:   '#3b82f6',
+  purple: '#a855f7',
+  red:    '#ef4444',
+}
+
+function getInitials(user: { full_name?: string; email?: string } | null): string {
+  if (!user) return 'DM'
+  if (user.full_name) return user.full_name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
+  return (user.email ?? '').slice(0, 2).toUpperCase()
+}
+
+function ProfileDropdown({ onClose }: { onClose: () => void }) {
   const { user, logout } = useAuth()
   const router = useRouter()
-  const pnlPos = insights.totalPnl >= 0
+  const initials = getInitials(user)
+  const avatarBg = AVATAR_COLOR_MAP[user?.avatar_color ?? 'amber'] ?? '#f59e0b'
+  const displayName = user?.full_name || user?.email?.split('@')[0] || 'User'
+  const planLabel = user?.plan ? user.plan.charAt(0).toUpperCase() + user.plan.slice(1) : 'Free'
 
   const handleLogout = async () => {
+    onClose()
     await logout()
     router.push('/login')
   }
 
-  // Initials from name or email
-  const initials = user
-    ? (user.full_name
-        ? user.full_name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
-        : user.email.slice(0, 2).toUpperCase())
-    : 'DM'
+  const go = (path: string) => {
+    onClose()
+    router.push(path)
+  }
+
+  return (
+    <div style={{
+      position: 'absolute', top: 'calc(100% + 8px)', right: 0,
+      width: 220, background: 'var(--color-bg-card)',
+      border: '1px solid var(--color-border)', borderRadius: 8,
+      boxShadow: '0 8px 32px rgba(0,0,0,0.4)', zIndex: 200,
+      overflow: 'hidden',
+    }}>
+      {/* User info block */}
+      <div style={{ padding: '0.875rem 1rem', borderBottom: '1px solid var(--color-border)', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+        <div style={{
+          width: 36, height: 36, borderRadius: '50%', background: avatarBg,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontFamily: 'var(--font-mono)', fontSize: '0.75rem', fontWeight: 800, color: '#000', flexShrink: 0,
+        }}>
+          {initials}
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {displayName}
+          </div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--color-text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {user?.email}
+          </div>
+          <span style={{
+            display: 'inline-block', marginTop: '0.2rem',
+            fontFamily: 'var(--font-mono)', fontSize: '0.55rem', fontWeight: 800,
+            letterSpacing: '0.08em', textTransform: 'uppercase',
+            color: user?.plan === 'pro' ? 'var(--color-positive)' : user?.plan === 'trader' ? 'var(--color-amber-primary)' : 'var(--color-text-muted)',
+            background: user?.plan === 'pro' ? 'rgba(0,214,143,0.1)' : user?.plan === 'trader' ? 'rgba(245,158,11,0.1)' : 'rgba(255,255,255,0.06)',
+            padding: '0.1rem 0.35rem', borderRadius: 3,
+          }}>
+            {planLabel} Plan
+          </span>
+        </div>
+      </div>
+
+      {/* Menu items */}
+      <div style={{ padding: '0.375rem 0' }}>
+        {[
+          { label: 'Profile & Settings', icon: '⚙', path: '/dashboard/settings' },
+          { label: 'Plan & Billing', icon: '◈', path: '/dashboard/settings?tab=plan' },
+          { label: 'Connected Brokers', icon: '⇌', path: '/dashboard/brokers' },
+        ].map(item => (
+          <button
+            key={item.path}
+            onClick={() => go(item.path)}
+            style={{
+              width: '100%', display: 'flex', alignItems: 'center', gap: '0.625rem',
+              padding: '0.5rem 1rem', background: 'transparent', border: 'none',
+              cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: '0.78rem',
+              color: 'var(--color-text-secondary)', textAlign: 'left',
+              transition: 'background 0.15s',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          >
+            <span style={{ width: 16, textAlign: 'center', opacity: 0.7 }}>{item.icon}</span>
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Sign out */}
+      <div style={{ borderTop: '1px solid var(--color-border)', padding: '0.375rem 0' }}>
+        <button
+          onClick={handleLogout}
+          style={{
+            width: '100%', display: 'flex', alignItems: 'center', gap: '0.625rem',
+            padding: '0.5rem 1rem', background: 'transparent', border: 'none',
+            cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: '0.78rem',
+            color: 'var(--color-negative)', textAlign: 'left',
+            transition: 'background 0.15s',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,77,109,0.06)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+        >
+          <span style={{ width: 16, textAlign: 'center', opacity: 0.7 }}>⏏</span>
+          Sign Out
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function DashboardHeader() {
+  const { range, setRange, insights, isLoading, hasRealData } = useDateRange()
+  const { user } = useAuth()
+  const pnlPos = insights.totalPnl >= 0
+  const [dropdownOpen, setDropdownOpen] = useState(false)
+  const avatarRef = useRef<HTMLDivElement>(null)
+
+  const initials = getInitials(user)
+  const avatarBg = AVATAR_COLOR_MAP[user?.avatar_color ?? 'amber'] ?? '#f59e0b'
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!dropdownOpen) return
+    const handle = (e: MouseEvent) => {
+      if (avatarRef.current && !avatarRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handle)
+    return () => document.removeEventListener('mousedown', handle)
+  }, [dropdownOpen])
 
   return (
     <header className="dashboard-header" style={{ justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50 }}>
@@ -116,13 +238,23 @@ function DashboardHeader() {
             </div>
           </div>
         )}
-        <div
-          className="user-avatar"
-          title={user ? `${user.full_name || user.email} · ${user.plan} plan · Sign out` : 'Demo mode'}
-          onClick={user ? handleLogout : undefined}
-          style={{ cursor: user ? 'pointer' : 'default', userSelect: 'none' }}
-        >
-          {initials}
+
+        {/* Avatar with dropdown */}
+        <div ref={avatarRef} style={{ position: 'relative' }}>
+          <div
+            className="user-avatar"
+            onClick={() => setDropdownOpen(o => !o)}
+            style={{
+              cursor: 'pointer', userSelect: 'none',
+              background: avatarBg,
+              outline: dropdownOpen ? `2px solid ${avatarBg}` : 'none',
+              outlineOffset: 2,
+            }}
+            title="Account"
+          >
+            {initials}
+          </div>
+          {dropdownOpen && <ProfileDropdown onClose={() => setDropdownOpen(false)} />}
         </div>
       </div>
     </header>
@@ -136,11 +268,12 @@ function Sidebar() {
 
   const displayName = user?.full_name || user?.email?.split('@')[0] || 'Demo User'
   const planLabel = user?.plan ? user.plan.charAt(0).toUpperCase() + user.plan.slice(1) + ' Plan' : 'Demo Mode'
+  const avatarBg = AVATAR_COLOR_MAP[user?.avatar_color ?? 'amber'] ?? '#f59e0b'
 
   return (
     <aside className="sidebar" style={{ height: '100%', overflowY: 'auto', position: 'sticky', top: 48, alignSelf: 'flex-start', maxHeight: 'calc(100vh - 48px)' }}>
       <div className="user-card">
-        <div className="user-avatar">{displayName.slice(0, 2).toUpperCase()}</div>
+        <div className="user-avatar" style={{ background: avatarBg, color: '#000' }}>{displayName.slice(0, 2).toUpperCase()}</div>
         <div>
           <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-text-primary)', fontFamily: 'var(--font-mono)' }}>{displayName}</div>
           <div style={{ fontSize: '0.6rem', color: 'var(--color-amber-dim)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{planLabel}</div>
@@ -185,7 +318,7 @@ function Sidebar() {
 
       {!hasRealData && (
         <div style={{ margin: '0.5rem', padding: '0.625rem', background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)', borderRadius: 4 }}>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--color-amber-primary)', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Demo Data</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--color-amber-primary)', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>No Data</div>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--color-text-muted)', lineHeight: 1.4 }}>
             Upload a CSV or connect a broker to see your real analytics.
           </div>
@@ -207,13 +340,8 @@ function SessionGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter()
 
   useEffect(() => {
-    // Only redirect if auth has finished loading and user is not authenticated
-    // We allow unauthenticated users to see the dashboard in demo mode
-    // (they can click "Demo (no login)" from login page)
     if (!isLoading && !isAuthenticated) {
       // Don't redirect — allow demo mode
-      // If you want strict auth, uncomment:
-      // router.push('/login')
     }
   }, [isAuthenticated, isLoading, router])
 
