@@ -734,9 +734,9 @@ func exchangeUpstox(cfg brokerConfig, code string) (string, string, *time.Time, 
 }
 
 func exchangeFyers(cfg brokerConfig, code string) (string, string, *time.Time, error) {
-	// Fyers v3: appIdHash = SHA256(appID-100 + ":" + secret + ":" + auth_code)
+	// Fyers v3: appIdHash = SHA256(appID-100 + ":" + secret_key) — auth_code NOT in hash
 	appID := cfg.APIKey + "-100"
-	raw := fmt.Sprintf("%s:%s:%s", appID, cfg.APISecret, code)
+	raw := fmt.Sprintf("%s:%s", appID, cfg.APISecret)
 	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
 	log.Printf("[exchangeFyers] appID=%s secretLen=%d codeLen=%d hashPrefix=%s", appID, len(cfg.APISecret), len(code), checksum[:8])
 
