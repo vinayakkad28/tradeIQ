@@ -114,6 +114,16 @@ func ConnectBroker(c *gin.Context) {
 		return
 	}
 
+	// Capture which frontend origin initiated this connect so the callback redirects back correctly.
+	// This fixes the localhost redirect bug when using production (Vercel → Railway).
+	frontendURL := c.GetHeader("Origin")
+	if frontendURL == "" {
+		frontendURL = os.Getenv("FRONTEND_URL")
+	}
+	if frontendURL == "" {
+		frontendURL = "http://localhost:3000"
+	}
+
 	// ── Dhan: OAuth consent flow ──────────────────────────
 	if req.BrokerName == "dhan" {
 		cfg := getBrokerConfig("dhan")
@@ -135,11 +145,12 @@ func ConnectBroker(c *gin.Context) {
 		// Store consentAppID as state — OAuthCallback uses it to link the tokenId back to this user
 		database.DB.Where("user_id = ? AND broker_name = ?", userID, "dhan").Delete(&models.BrokerOAuthState{})
 		database.DB.Create(&models.BrokerOAuthState{
-			ID:         uuid.New(),
-			UserID:     userID,
-			BrokerName: "dhan",
-			State:      consentAppID,
-			ExpiresAt:  time.Now().Add(10 * time.Minute),
+			ID:          uuid.New(),
+			UserID:      userID,
+			BrokerName:  "dhan",
+			State:       consentAppID,
+			FrontendURL: frontendURL,
+			ExpiresAt:   time.Now().Add(10 * time.Minute),
 		})
 
 		oauthURL := "https://auth.dhan.co/login/consentApp-login?consentAppId=" + consentAppID
@@ -170,11 +181,12 @@ func ConnectBroker(c *gin.Context) {
 	// Store state in DB (expires in 10 min)
 	database.DB.Where("user_id = ? AND broker_name = ?", userID, req.BrokerName).Delete(&models.BrokerOAuthState{})
 	database.DB.Create(&models.BrokerOAuthState{
-		ID:         uuid.New(),
-		UserID:     userID,
-		BrokerName: req.BrokerName,
-		State:      state,
-		ExpiresAt:  time.Now().Add(10 * time.Minute),
+		ID:          uuid.New(),
+		UserID:      userID,
+		BrokerName:  req.BrokerName,
+		State:       state,
+		FrontendURL: frontendURL,
+		ExpiresAt:   time.Now().Add(10 * time.Minute),
 	})
 
 	// Build OAuth URL
@@ -302,12 +314,19 @@ func buildOAuthURL(broker string, cfg brokerConfig, state string) string {
 // Called by broker OAuth redirect. Reads state from cookie/param.
 // This public endpoint then redirects to frontend with the code+state.
 
-func OAuthCallback(c *gin.Context) {
-	frontendBase := os.Getenv("FRONTEND_URL")
-	if frontendBase == "" {
-		frontendBase = "http://localhost:3000"
+// fallbackFrontend returns the stored FrontendURL from the state if non-empty,
+// otherwise falls back to the FRONTEND_URL env var, then localhost.
+func fallbackFrontend(stored string) string {
+	if stored != "" {
+		return stored
 	}
+	if env := os.Getenv("FRONTEND_URL"); env != "" {
+		return env
+	}
+	return "http://localhost:3000"
+}
 
+func OAuthCallback(c *gin.Context) {
 	// ── Dhan: returns ?tokenId= instead of standard ?code=&state= ──
 	// Dhan's configured redirect URL receives only tokenId — no state is echoed back.
 	// We look up the most recently created active Dhan state to reconnect it to the user.
@@ -316,9 +335,11 @@ func OAuthCallback(c *gin.Context) {
 		var dhanState models.BrokerOAuthState
 		if err := database.DB.Where("broker_name = ? AND expires_at > ?", "dhan", time.Now()).
 			Order("created_at DESC").First(&dhanState).Error; err != nil {
+			frontendBase := fallbackFrontend("")
 			c.Redirect(http.StatusFound, frontendBase+"/dashboard/brokers?error=dhan_state_not_found")
 			return
 		}
+		frontendBase := fallbackFrontend(dhanState.FrontendURL)
 		// Forward to frontend as standard code+state+broker so OAuthCallbackHandler works unchanged
 		redirectURL := fmt.Sprintf("%s/dashboard/brokers?code=%s&state=%s&broker=dhan",
 			frontendBase, url.QueryEscape(tokenID), url.QueryEscape(dhanState.State))
@@ -341,9 +362,11 @@ func OAuthCallback(c *gin.Context) {
 				Order("created_at DESC").First(&angelState)
 		}
 		if angelState.ID == uuid.Nil {
+			frontendBase := fallbackFrontend("")
 			c.Redirect(http.StatusFound, frontendBase+"/dashboard/brokers?error=angelone_state_not_found")
 			return
 		}
+		frontendBase := fallbackFrontend(angelState.FrontendURL)
 		// Pass auth_token as "code" and feedToken as "refresh_token" so BrokerCallback can store both
 		redirectURL := fmt.Sprintf("%s/dashboard/brokers?code=%s&state=%s&broker=angelone&feed_token=%s",
 			frontendBase, url.QueryEscape(authToken), url.QueryEscape(angelState.State), url.QueryEscape(feedToken))
@@ -357,17 +380,20 @@ func OAuthCallback(c *gin.Context) {
 	broker := c.Query("broker")
 
 	if code == "" || state == "" {
+		frontendBase := fallbackFrontend("")
 		c.Redirect(http.StatusFound, frontendBase+"/dashboard/brokers?error=oauth_failed")
 		return
 	}
 
-	// Look up state to find the broker
+	// Look up state to find the broker and stored frontend URL
 	var oauthState models.BrokerOAuthState
 	if err := database.DB.First(&oauthState, "state = ? AND expires_at > ?", state, time.Now()).Error; err != nil {
+		frontendBase := fallbackFrontend("")
 		c.Redirect(http.StatusFound, frontendBase+"/dashboard/brokers?error=invalid_state")
 		return
 	}
 
+	frontendBase := fallbackFrontend(oauthState.FrontendURL)
 	if broker == "" {
 		broker = oauthState.BrokerName
 	}

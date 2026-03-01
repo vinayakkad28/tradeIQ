@@ -8,12 +8,13 @@ import (
 )
 
 type BrokerOAuthState struct {
-	ID         uuid.UUID `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	UserID     uuid.UUID `gorm:"index;not null" json:"user_id"`
-	BrokerName string    `gorm:"not null" json:"broker_name"`
-	State      string    `gorm:"uniqueIndex;not null" json:"state"`
-	ExpiresAt  time.Time `gorm:"not null" json:"expires_at"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID          uuid.UUID `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	UserID      uuid.UUID `gorm:"index;not null" json:"user_id"`
+	BrokerName  string    `gorm:"not null" json:"broker_name"`
+	State       string    `gorm:"uniqueIndex;not null" json:"state"`
+	FrontendURL string    `json:"frontend_url"` // origin of the frontend that initiated connect
+	ExpiresAt   time.Time `gorm:"not null" json:"expires_at"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type RefreshToken struct {
