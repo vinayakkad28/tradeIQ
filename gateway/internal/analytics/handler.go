@@ -79,7 +79,11 @@ func GetInsights(c *gin.Context) {
 
 func GetEquityCurve(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
+	user := c.MustGet("user").(models.User)
 	dateRange := c.DefaultQuery("range", "1m")
+	if user.Plan == "free" && (dateRange == "3m" || dateRange == "6m" || dateRange == "all") {
+		dateRange = "1m"
+	}
 	trades := getTradesForRange(userID, dateRange)
 
 	type Point struct {
@@ -117,7 +121,11 @@ func GetEquityCurve(c *gin.Context) {
 
 func GetHeatmap(c *gin.Context) {
 	userID := c.MustGet("user_id").(uuid.UUID)
+	user := c.MustGet("user").(models.User)
 	dateRange := c.DefaultQuery("range", "1m")
+	if user.Plan == "free" && (dateRange == "3m" || dateRange == "6m" || dateRange == "all") {
+		dateRange = "1m"
+	}
 	dimension := c.DefaultQuery("dimension", "hour")
 	trades := getTradesForRange(userID, dateRange)
 

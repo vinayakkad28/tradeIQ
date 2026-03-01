@@ -96,7 +96,19 @@ export default function JournalPage() {
   useEffect(() => {
     if (!isAuthenticated || !hasRealData) return
     setLoadingTrades(true)
-    tradesAPI.list({ limit: 500 })
+    const now = new Date()
+    const cutoffs: Record<string, Date | null> = {
+      '7d':  new Date(now.getTime() - 7 * 86400_000),
+      '1m':  new Date(new Date().setMonth(now.getMonth() - 1)),
+      '3m':  new Date(new Date().setMonth(now.getMonth() - 3)),
+      '6m':  new Date(new Date().setMonth(now.getMonth() - 6)),
+      'all': null,
+    }
+    const cutoff = cutoffs[range] ?? null
+    tradesAPI.list({
+      limit: 500,
+      ...(cutoff ? { start_date: cutoff.toISOString().slice(0, 10) } : {}),
+    })
       .then(res => setApiTrades(res.data.trades ?? res.data.data ?? []))
       .catch(() => setApiTrades([]))
       .finally(() => setLoadingTrades(false))

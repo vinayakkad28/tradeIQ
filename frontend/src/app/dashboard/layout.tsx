@@ -174,6 +174,8 @@ function DashboardHeader() {
   const pnlPos = insights.totalPnl >= 0
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const avatarRef = useRef<HTMLDivElement>(null)
+  const isFree = !user || user.plan === 'free'
+  const GATED: DateRange[] = isFree ? ['3m', '6m', 'all'] : []
 
   const initials = getInitials(user)
   const avatarBg = AVATAR_COLOR_MAP[user?.avatar_color ?? 'amber'] ?? '#f59e0b'
@@ -202,15 +204,20 @@ function DashboardHeader() {
           </span>
         )}
         <div style={{ display: 'flex', gap: '0.25rem' }}>
-          {RANGES.map(r => (
-            <button
-              key={r.value}
-              className={`range-pill ${range === r.value ? 'active' : ''}`}
-              onClick={() => setRange(r.value)}
-            >
-              {r.label}
-            </button>
-          ))}
+          {RANGES.map(r => {
+            const gated = GATED.includes(r.value)
+            return (
+              <button
+                key={r.value}
+                className={`range-pill ${range === r.value ? 'active' : ''} ${gated ? 'gated' : ''}`}
+                onClick={() => !gated && setRange(r.value)}
+                title={gated ? 'Upgrade to Trader plan to unlock' : undefined}
+                style={gated ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
+              >
+                {r.label}{gated ? ' 🔒' : ''}
+              </button>
+            )
+          })}
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
