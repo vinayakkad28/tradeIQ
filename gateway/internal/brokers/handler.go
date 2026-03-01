@@ -126,6 +126,29 @@ func ConnectBroker(c *gin.Context) {
 		frontendURL = "http://localhost:3000"
 	}
 
+	// ── Dhan: personal access token (skip OAuth) ──────────
+	if req.BrokerName == "dhan" && req.AccessToken != "" {
+		now := time.Now()
+		conn := models.BrokerConnection{}
+		database.DB.Where("user_id = ? AND broker_name = ?", userID, "dhan").First(&conn)
+		conn.UserID = userID
+		conn.BrokerName = "dhan"
+		conn.DisplayName = brokerDisplayName("dhan")
+		conn.AccessToken = req.AccessToken
+		conn.ExternalUserID = req.ClientID
+		conn.Status = "connected"
+		conn.ConnectedAt = now
+		conn.RefreshToken = ""
+		if conn.ID == uuid.Nil {
+			conn.ID = uuid.New()
+			database.DB.Create(&conn)
+		} else {
+			database.DB.Save(&conn)
+		}
+		c.JSON(http.StatusOK, gin.H{"connection": conn})
+		return
+	}
+
 	// ── Dhan: OAuth consent flow ──────────────────────────
 	if req.BrokerName == "dhan" {
 		cfg := getBrokerConfig("dhan")

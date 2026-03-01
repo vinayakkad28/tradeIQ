@@ -75,9 +75,9 @@ export const brokerAPI = {
   list: () => api.get('/users/me/brokers'),
   connect: (brokerName: string) =>
     api.post('/users/me/brokers/connect', { broker_name: brokerName }),
-  /** For token-based brokers (Dhan). Passes access_token directly — no OAuth redirect. */
-  connectWithToken: (brokerName: string, accessToken: string) =>
-    api.post('/users/me/brokers/connect', { broker_name: brokerName, access_token: accessToken }),
+  /** For token-based brokers (Dhan). Passes access_token + client_id directly — no OAuth redirect. */
+  connectWithToken: (brokerName: string, accessToken: string, clientId?: string) =>
+    api.post('/users/me/brokers/connect', { broker_name: brokerName, access_token: accessToken, client_id: clientId }),
   callback: (brokerName: string, code: string, state: string) =>
     api.post('/users/me/brokers/callback', { broker_name: brokerName, code, state }),
   /** Callback with optional feed_token (AngelOne Publisher login returns this alongside auth_token). */

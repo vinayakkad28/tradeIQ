@@ -5,11 +5,11 @@ import { brokerAPI } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
 
 const SUPPORTED_BROKERS = [
-  { id: 'zerodha',  name: 'Zerodha',  description: 'Kite API — OAuth 2.0',   logo: 'Z', color: '#387ed1' },
-  { id: 'upstox',   name: 'Upstox',   description: 'Upstox Pro API v2',       logo: 'U', color: '#7ac231' },
-  { id: 'angelone', name: 'AngelOne', description: 'SmartAPI — OAuth 2.0',    logo: 'A', color: '#f77f00' },
-  { id: 'fyers',    name: 'Fyers',    description: 'Fyers API v3',            logo: 'F', color: '#1e6fd9' },
-  { id: 'dhan',     name: 'Dhan',     description: 'Dhan HQ v2 — OAuth 2.0', logo: 'D', color: '#6d2bff' },
+  { id: 'zerodha',  name: 'Zerodha',  description: 'Kite API — OAuth 2.0',        logo: 'Z', color: '#387ed1', manualToken: false },
+  { id: 'upstox',   name: 'Upstox',   description: 'Upstox Pro API v2',            logo: 'U', color: '#7ac231', manualToken: false },
+  { id: 'angelone', name: 'AngelOne', description: 'SmartAPI — OAuth 2.0',         logo: 'A', color: '#f77f00', manualToken: false },
+  { id: 'fyers',    name: 'Fyers',    description: 'Fyers API v3',                 logo: 'F', color: '#1e6fd9', manualToken: false },
+  { id: 'dhan',     name: 'Dhan',     description: 'Dhan HQ v2 — Personal Token', logo: 'D', color: '#6d2bff', manualToken: true },
 ]
 
 type Connection = {
@@ -75,6 +75,7 @@ export default function BrokersPage() {
   const [disconnecting, setDisconnecting] = useState<string | null>(null)
   const [message, setMessage]         = useState<{ text: string; ok: boolean } | null>(null)
   const [loadingList, setLoadingList] = useState(true)
+  const [tokenForm, setTokenForm]     = useState<{ brokerId: string; token: string; clientId: string } | null>(null)
 
   const showMessage = (text: string, ok = true) => {
     setMessage({ text, ok })
@@ -109,6 +110,30 @@ export default function BrokersPage() {
       }
     } catch {
       showMessage('Connection failed. Please try again.', false)
+    } finally {
+      setConnecting(null)
+    }
+  }
+
+  const connectWithManualToken = async (brokerId: string, token: string, clientId: string) => {
+    if (!token.trim()) { showMessage('Access token is required.', false); return }
+    setConnecting(brokerId)
+    try {
+      const res = await brokerAPI.connectWithToken(brokerId, token.trim(), clientId.trim() || undefined)
+      const connId = res.data.connection?.id
+      showMessage(`${brokerId} connected! Importing your trades...`, true)
+      setTokenForm(null)
+      fetchConnections()
+      if (connId) {
+        try {
+          const syncRes = await brokerAPI.sync(connId)
+          const count = syncRes.data.trades_synced ?? syncRes.data.data?.trades_synced ?? 0
+          showMessage(`${brokerId} connected! Imported ${count} trade(s).`, true)
+          fetchConnections()
+        } catch { /* sync error — user can click Sync Now */ }
+      }
+    } catch {
+      showMessage('Connection failed. Check your token and try again.', false)
     } finally {
       setConnecting(null)
     }
@@ -272,6 +297,51 @@ export default function BrokersPage() {
 
                 {isFullyConnected ? (
                   <span className="badge badge-green" style={{ alignSelf: 'flex-start' }}>CONNECTED</span>
+                ) : broker.manualToken ? (
+                  // Manual token flow (Dhan)
+                  tokenForm?.brokerId === broker.id ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      <input
+                        type="text"
+                        placeholder="Access Token (from web.dhan.co → API)"
+                        value={tokenForm.token}
+                        onChange={e => setTokenForm(f => f ? { ...f, token: e.target.value } : null)}
+                        style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', padding: '0.4rem 0.5rem', background: 'var(--color-bg-input)', border: '1px solid var(--color-border)', borderRadius: 4, color: 'var(--color-text-primary)', width: '100%' }}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Client ID (e.g. 1102691389)"
+                        value={tokenForm.clientId}
+                        onChange={e => setTokenForm(f => f ? { ...f, clientId: e.target.value } : null)}
+                        style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', padding: '0.4rem 0.5rem', background: 'var(--color-bg-input)', border: '1px solid var(--color-border)', borderRadius: 4, color: 'var(--color-text-primary)', width: '100%' }}
+                      />
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button
+                          className="btn-primary"
+                          onClick={() => connectWithManualToken(broker.id, tokenForm.token, tokenForm.clientId)}
+                          disabled={connecting === broker.id}
+                          style={{ flex: 1, justifyContent: 'center', fontSize: '0.75rem' }}
+                        >
+                          {connecting === broker.id ? 'Connecting...' : 'Connect'}
+                        </button>
+                        <button
+                          className="btn-ghost"
+                          onClick={() => setTokenForm(null)}
+                          style={{ fontSize: '0.75rem' }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      className="btn-primary"
+                      onClick={() => setTokenForm({ brokerId: broker.id, token: '', clientId: '' })}
+                      style={{ width: '100%', justifyContent: 'center' }}
+                    >
+                      {existingConn ? `⟳ Reconnect ${broker.name}` : `Connect ${broker.name}`}
+                    </button>
+                  )
                 ) : existingConn ? (
                   // Connection exists but token expired — show Reconnect
                   <button
@@ -332,7 +402,7 @@ export default function BrokersPage() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
           {[
             { step: '01', title: 'OAuth Authorization', desc: 'Click Connect. You\'ll be redirected to your broker\'s site to authorize TradeIQ with read-only access to your trade history.' },
-            { step: '02', title: 'Full History Import', desc: 'TradeIQ fetches your complete trade history — all available data since account opening. Dhan supports full history. AngelOne requires CSV for history beyond today.' },
+            { step: '02', title: 'Full History Import', desc: 'TradeIQ fetches your complete trade history. Dhan: generate a personal access token at web.dhan.co → API → New Token. AngelOne requires CSV for history beyond today.' },
             { step: '03', title: 'Daily Sync', desc: 'Trades sync automatically every morning at 6 AM IST. Or click Sync Now for immediate refresh.' },
           ].map(item => (
             <div key={item.step}>
