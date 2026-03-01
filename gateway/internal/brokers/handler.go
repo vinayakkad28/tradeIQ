@@ -194,7 +194,7 @@ func ConnectBroker(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"oauth_url":  "",
 			"state":      "",
-			"message":    fmt.Sprintf("%s OAuth not yet configured. Set %s_API_KEY env var.", req.BrokerName, strings.ToUpper(req.BrokerName)),
+			"message":    brokerEnvHint(req.BrokerName),
 			"configured": false,
 		})
 		return
@@ -1715,6 +1715,20 @@ func classifyDhanSegment(exchangeSegment, productType string) string {
 		return "EQ"
 	}
 	return "EQ"
+}
+
+func brokerEnvHint(broker string) string {
+	switch broker {
+	case "upstox":
+		return "Upstox OAuth not configured. Set UPSTOX_CLIENT_ID, UPSTOX_CLIENT_SECRET env vars."
+	case "fyers":
+		return "Fyers OAuth not configured. Set FYERS_APP_ID, FYERS_SECRET_KEY env vars."
+	case "zerodha":
+		return "Zerodha OAuth not configured. Set ZERODHA_API_KEY, ZERODHA_API_SECRET env vars."
+	case "angelone":
+		return "AngelOne OAuth not configured. Set ANGELONE_API_KEY env var."
+	}
+	return broker + " OAuth not configured."
 }
 
 func brokerDisplayName(broker string) string {
