@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -464,13 +465,16 @@ func BrokerCallback(c *gin.Context) {
 		FeedToken  string `json:"feed_token"` // AngelOne publisher login returns this alongside auth_token
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("[BrokerCallback] VALIDATION_ERROR: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "VALIDATION_ERROR", "message": err.Error()})
 		return
 	}
+	log.Printf("[BrokerCallback] broker=%s userID=%s stateLen=%d codeLen=%d", req.BrokerName, userID, len(req.State), len(req.Code))
 
 	// Validate state
 	var oauthState models.BrokerOAuthState
 	if err := database.DB.First(&oauthState, "state = ? AND user_id = ? AND expires_at > ?", req.State, userID, time.Now()).Error; err != nil {
+		log.Printf("[BrokerCallback] INVALID_STATE: state=%s userID=%s err=%v", req.State, userID, err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "INVALID_STATE", "message": "OAuth state expired or invalid"})
 		return
 	}
@@ -482,6 +486,7 @@ func BrokerCallback(c *gin.Context) {
 	// Exchange code for access token
 	accessToken, refreshToken, expiresAt, err := exchangeToken(req.BrokerName, cfg, req.Code)
 	if err != nil {
+		log.Printf("[BrokerCallback] TOKEN_EXCHANGE_FAILED broker=%s err=%v", req.BrokerName, err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "TOKEN_EXCHANGE_FAILED", "message": err.Error()})
 		return
 	}
