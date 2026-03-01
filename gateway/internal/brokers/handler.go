@@ -420,10 +420,10 @@ func OAuthCallback(c *gin.Context) {
 	}
 
 	// ── Standard OAuth (Upstox, Fyers …) ──
-	// Fyers uses ?auth_code= instead of ?code=
-	code := c.Query("code")
+	// Fyers returns ?auth_code=REAL_CODE&code=200 — always prefer auth_code if present
+	code := c.Query("auth_code")
 	if code == "" {
-		code = c.Query("auth_code") // Fyers v3 callback param
+		code = c.Query("code")
 	}
 	state := c.Query("state")
 	broker := c.Query("broker")
