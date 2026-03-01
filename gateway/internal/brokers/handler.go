@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -514,6 +516,9 @@ func SyncBroker(c *gin.Context) {
 		}
 	}
 
+	// Pair raw BUY/SELL fills into closed positions with computed P&L
+	reconcilePositions(userID, conn.ID)
+
 	now := time.Now()
 	conn.LastSyncedAt = &now
 	conn.TradeCount += imported
@@ -554,6 +559,9 @@ func SyncAllBrokers(c *gin.Context) {
 				imported++
 			}
 		}
+
+		// Pair raw fills into closed positions with P&L
+		reconcilePositions(userID, conn.ID)
 
 		now := time.Now()
 		conn.LastSyncedAt = &now
@@ -1132,86 +1140,203 @@ type dhanTrade struct {
 }
 
 func fetchDhanTrades(conn models.BrokerConnection, _ brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
-	// Fetch last 90 days. Dhan returns data oldest-first per page.
-	toDate := time.Now().Format("2006-01-02")
-	fromDate := time.Now().AddDate(0, 0, -90).Format("2006-01-02")
-
+	// Fetch up to 1 year of history using multiple 90-day windows.
+	// Dhan API allows max 90 days per request.
 	connID := conn.ID
 	var allTrades []models.Trade
+	seen := make(map[string]bool)
 
-	for page := 0; page <= 50; page++ { // page 0-based; 50-page safety cap
-		apiURL := fmt.Sprintf("https://api.dhan.co/v2/trades/%s/%s/%d", fromDate, toDate, page)
+	now := time.Now()
+	// Four 90-day windows: 0–90, 90–180, 180–270, 270–365 days ago
+	for windowIdx := 0; windowIdx < 4; windowIdx++ {
+		windowEnd := now.AddDate(0, 0, -windowIdx*90)
+		windowStart := now.AddDate(0, 0, -(windowIdx+1)*90)
+		toDate := windowEnd.Format("2006-01-02")
+		fromDate := windowStart.Format("2006-01-02")
 
-		req, err := http.NewRequest("GET", apiURL, nil)
-		if err != nil {
-			return nil, fmt.Errorf("dhan: build request: %w", err)
-		}
-		// Dhan v2 auth: access-token header (JWT embeds client-id — no separate client-id header)
-		req.Header.Set("access-token", conn.AccessToken)
-		req.Header.Set("Accept", "application/json")
-		req.Header.Set("Content-Type", "application/json")
+		for page := 0; page <= 50; page++ { // page 0-based; 50-page safety cap
+			apiURL := fmt.Sprintf("https://api.dhan.co/v2/trades/%s/%s/%d", fromDate, toDate, page)
 
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("dhan: http error: %w", err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+			req, err := http.NewRequest("GET", apiURL, nil)
+			if err != nil {
+				return nil, fmt.Errorf("dhan: build request: %w", err)
+			}
+			// Dhan v2 auth: access-token header (JWT embeds client-id — no separate client-id header)
+			req.Header.Set("access-token", conn.AccessToken)
+			req.Header.Set("Accept", "application/json")
+			req.Header.Set("Content-Type", "application/json")
 
-		if resp.StatusCode == http.StatusUnauthorized {
-			return nil, fmt.Errorf("dhan: access token expired or invalid (HTTP 401)")
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("dhan: unexpected status %d: %s", resp.StatusCode, string(body))
-		}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return nil, fmt.Errorf("dhan: http error: %w", err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
 
-		var page_trades []dhanTrade
-		if err := json.Unmarshal(body, &page_trades); err != nil {
-			return nil, fmt.Errorf("dhan: decode response: %w", err)
-		}
-		if len(page_trades) == 0 {
-			break // No more pages
-		}
-
-		for _, t := range page_trades {
-			tradeTime := parseDhanTime(t.CreateTime, t.ExchangeTime)
-			segment := classifyDhanSegment(t.ExchangeSegment, t.ProductType)
-			instrumentType := dhanInstrumentType(t.ExchangeSegment, t.DrvOptionType)
-			instrument := buildDhanInstrumentName(t)
-
-			// Total charges: sum all Dhan-provided tax/fee fields
-			charges := t.SebiTax + t.STT + t.BrokerageCharges + t.ServiceTax +
-				t.ExchangeTransactionCharges + t.StampDuty
-
-			// Prefer exchange trade ID for deduplication; fall back to order ID
-			brokerTradeID := t.ExchangeTradeID
-			if brokerTradeID == "" {
-				brokerTradeID = t.OrderID
+			if resp.StatusCode == http.StatusUnauthorized {
+				return nil, fmt.Errorf("dhan: access token expired or invalid (HTTP 401)")
+			}
+			if resp.StatusCode != http.StatusOK {
+				return nil, fmt.Errorf("dhan: unexpected status %d: %s", resp.StatusCode, string(body))
 			}
 
-			rawJSON, _ := json.Marshal(t)
+			var pageTrades []dhanTrade
+			if err := json.Unmarshal(body, &pageTrades); err != nil {
+				return nil, fmt.Errorf("dhan: decode response: %w", err)
+			}
+			if len(pageTrades) == 0 {
+				break // No more pages for this window
+			}
 
-			allTrades = append(allTrades, models.Trade{
-				ID:                 uuid.New(),
-				UserID:             userID,
-				BrokerConnectionID: &connID,
-				BrokerTradeID:      brokerTradeID,
-				TradeDate:          tradeTime,
-				EntryTime:          tradeTime,
-				Instrument:         instrument,
-				InstrumentType:     instrumentType,
-				Segment:            segment,
-				Direction:          t.TransactionType, // "BUY" or "SELL"
-				EntryPrice:         t.TradedPrice,
-				Quantity:           t.TradedQuantity,
-				Charges:            charges,
-				Source:             "dhan_v2",
-				RawData:            datatypes.JSON(rawJSON),
-			})
+			for _, t := range pageTrades {
+				// Prefer exchange trade ID for deduplication; fall back to order ID
+				brokerTradeID := t.ExchangeTradeID
+				if brokerTradeID == "" {
+					brokerTradeID = t.OrderID
+				}
+				// Skip already-seen fills (cross-window deduplication)
+				if seen[brokerTradeID] {
+					continue
+				}
+				seen[brokerTradeID] = true
+
+				tradeTime := parseDhanTime(t.CreateTime, t.ExchangeTime)
+				segment := classifyDhanSegment(t.ExchangeSegment, t.ProductType)
+				instrumentType := dhanInstrumentType(t.ExchangeSegment, t.DrvOptionType)
+				instrument := buildDhanInstrumentName(t)
+
+				// Total charges: sum all Dhan-provided tax/fee fields
+				charges := t.SebiTax + t.STT + t.BrokerageCharges + t.ServiceTax +
+					t.ExchangeTransactionCharges + t.StampDuty
+
+				rawJSON, _ := json.Marshal(t)
+
+				allTrades = append(allTrades, models.Trade{
+					ID:                 uuid.New(),
+					UserID:             userID,
+					BrokerConnectionID: &connID,
+					BrokerTradeID:      brokerTradeID,
+					TradeDate:          tradeTime,
+					EntryTime:          tradeTime,
+					Instrument:         instrument,
+					InstrumentType:     instrumentType,
+					Segment:            segment,
+					Direction:          t.TransactionType, // "BUY" or "SELL"
+					EntryPrice:         t.TradedPrice,
+					Quantity:           t.TradedQuantity,
+					Charges:            charges,
+					Source:             "dhan_v2",
+					RawData:            datatypes.JSON(rawJSON),
+				})
+			}
+		} // end page loop
+	} // end window loop
+
+	return allTrades, nil
+}
+
+// reconcilePositions pairs raw BUY/SELL fills (stored with PnL=nil after broker sync)
+// into closed position records with computed P&L, then deletes the raw fills.
+// Groups fills by (instrument, calendar date). Uses weighted-average pricing.
+func reconcilePositions(userID uuid.UUID, connID uuid.UUID) {
+	var fills []models.Trade
+	database.DB.Where("user_id = ? AND broker_connection_id = ? AND pnl IS NULL", userID, connID).
+		Order("trade_date ASC, entry_time ASC").
+		Find(&fills)
+	if len(fills) == 0 {
+		return
+	}
+
+	// Group fills by instrument + calendar date
+	type groupKey struct{ instrument, date string }
+	groups := map[groupKey][]models.Trade{}
+	for _, f := range fills {
+		k := groupKey{f.Instrument, f.TradeDate.Format("2006-01-02")}
+		groups[k] = append(groups[k], f)
+	}
+
+	var toDelete []uuid.UUID
+	var toCreate []models.Trade
+
+	for _, grpFills := range groups {
+		var buys, sells []models.Trade
+		for _, f := range grpFills {
+			if strings.ToUpper(f.Direction) == "BUY" {
+				buys = append(buys, f)
+			} else {
+				sells = append(sells, f)
+			}
+		}
+		if len(buys) == 0 || len(sells) == 0 {
+			// Open position (no matching side) — skip, leave unreconciled
+			continue
+		}
+
+		sort.Slice(buys, func(i, j int) bool { return buys[i].EntryTime.Before(buys[j].EntryTime) })
+		sort.Slice(sells, func(i, j int) bool { return sells[i].EntryTime.Before(sells[j].EntryTime) })
+
+		// Weighted-average buy and sell prices across all fills
+		var totalBuyQty, totalSellQty int
+		var totalBuyValue, totalSellValue, totalCharges float64
+		var exitTime time.Time
+		for _, b := range buys {
+			totalBuyQty += b.Quantity
+			totalBuyValue += float64(b.Quantity) * b.EntryPrice
+			totalCharges += b.Charges
+		}
+		for _, s := range sells {
+			totalSellQty += s.Quantity
+			totalSellValue += float64(s.Quantity) * s.EntryPrice
+			totalCharges += s.Charges
+			if s.EntryTime.After(exitTime) {
+				exitTime = s.EntryTime
+			}
+		}
+
+		matchedQty := int(math.Min(float64(totalBuyQty), float64(totalSellQty)))
+		if matchedQty == 0 {
+			continue
+		}
+
+		avgBuy := totalBuyValue / float64(totalBuyQty)
+		avgSell := totalSellValue / float64(totalSellQty)
+		grossPnL := (avgSell - avgBuy) * float64(matchedQty)
+		netPnL := grossPnL - totalCharges
+
+		refFill := grpFills[0]
+		connIDCopy := connID
+		pos := models.Trade{
+			ID:                 uuid.New(),
+			UserID:             userID,
+			BrokerConnectionID: &connIDCopy,
+			BrokerTradeID:      "pos_" + refFill.BrokerTradeID,
+			TradeDate:          refFill.TradeDate,
+			EntryTime:          refFill.EntryTime,
+			ExitTime:           &exitTime,
+			Instrument:         refFill.Instrument,
+			InstrumentType:     refFill.InstrumentType,
+			Segment:            refFill.Segment,
+			Direction:          "BUY",
+			EntryPrice:         avgBuy,
+			ExitPrice:          &avgSell,
+			Quantity:           matchedQty,
+			Charges:            totalCharges,
+			PnL:                &grossPnL,
+			NetPnL:             &netPnL,
+			Source:             refFill.Source,
+		}
+		toCreate = append(toCreate, pos)
+		for _, f := range grpFills {
+			toDelete = append(toDelete, f.ID)
 		}
 	}
 
-	return allTrades, nil
+	if len(toDelete) > 0 {
+		database.DB.Where("id IN ?", toDelete).Delete(&models.Trade{})
+	}
+	for i := range toCreate {
+		database.DB.Create(&toCreate[i])
+	}
 }
 
 // parseDhanTime parses Dhan timestamp strings ("2006-01-02 15:04:05").
