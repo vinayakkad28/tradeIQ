@@ -585,3 +585,139 @@ body {
 .info-tooltip-wrapper:hover .info-tooltip-box {
   display: block;
 }
+
+/* ─────────────────────────────────────────────────────── */
+/* SPINNER                                                 */
+/* ─────────────────────────────────────────────────────── */
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ─────────────────────────────────────────────────────── */
+/* MOBILE RESPONSIVE — SIDEBAR DRAWER + GRID COLLAPSE      */
+/* ─────────────────────────────────────────────────────── */
+
+.mobile-menu-btn {
+  display: none;
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  font-size: 1.2rem;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.sidebar-overlay {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .mobile-menu-btn {
+    display: inline-flex;
+  }
+
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 48px;
+    bottom: 0;
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    background: var(--color-bg-primary);
+    width: 260px;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+  }
+  .sidebar.sidebar-open {
+    transform: translateX(0);
+  }
+  .sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    top: 48px;
+    z-index: 99;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  .sidebar-overlay.sidebar-open {
+    display: block;
+  }
+
+  /* Collapse ALL inline grid layouts inside page content to 2 columns max.
+     This catches repeat(3..7, 1fr) grids across all dashboard pages without
+     needing className on each one. */
+  .page-enter [style*="grid-template-columns: repeat("],
+  .page-enter [style*="grid-template-columns: '"],
+  .kpi-grid-7, .kpi-grid-5, .kpi-grid-4, .kpi-grid-3 {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  .kpi-grid-2,
+  .page-enter [style*="240px 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Header adjustments */
+  .dashboard-header {
+    padding: 0 0.75rem;
+  }
+  .dashboard-header .metric-block {
+    display: none;
+  }
+  .range-pill {
+    font-size: 0.6rem;
+    padding: 0.15rem 0.4rem;
+  }
+
+  /* Table scroll */
+  .terminal-table {
+    font-size: 0.7rem;
+  }
+  .terminal-table th, .terminal-table td {
+    padding: 0.4rem 0.5rem;
+  }
+
+  /* Content padding */
+  .page-enter {
+    padding: 1rem !important;
+  }
+
+  /* Data values */
+  .data-value {
+    font-size: 1.1rem;
+  }
+  .data-value-xl {
+    font-size: 1.75rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .kpi-grid-7, .kpi-grid-5, .kpi-grid-4, .kpi-grid-3 {
+    grid-template-columns: 1fr !important;
+  }
+  .range-pill {
+    font-size: 0.55rem;
+    padding: 0.1rem 0.3rem;
+  }
+}
+
+/* ─────────────────────────────────────────────────────── */
+/* ACCESSIBILITY                                           */
+/* ─────────────────────────────────────────────────────── */
+
+/* Visible focus rings for keyboard navigation */
+*:focus-visible {
+  outline: 2px solid var(--color-amber-primary);
+  outline-offset: 2px;
+}
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .page-enter { animation: none; }
+  .pulse-alert { animation: none; }
+  .progress-fill { transition: none; }
+}

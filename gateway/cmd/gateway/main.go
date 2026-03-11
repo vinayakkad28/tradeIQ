@@ -15,16 +15,25 @@ import (
 	"tradeiq/gateway/internal/trades"
 	"tradeiq/gateway/internal/users"
 	wshandler "tradeiq/gateway/internal/ws"
+	appcrypto "tradeiq/gateway/pkg/crypto"
 	"tradeiq/gateway/pkg/database"
 	"tradeiq/gateway/pkg/middleware"
+	"tradeiq/gateway/pkg/redisclient"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	// Init database
+	// Fail fast: validate required env vars
+	if os.Getenv("JWT_SECRET") == "" {
+		log.Fatal("FATAL: JWT_SECRET environment variable must be set")
+	}
+
+	// Init subsystems
 	database.Init()
+	appcrypto.Init()
+	redisclient.Init()
 
 	// Gin setup
 	if os.Getenv("GIN_MODE") == "release" {
@@ -32,19 +41,25 @@ func main() {
 	}
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(middleware.RequestID())
+	r.Use(middleware.StructuredLogger())
+	r.Use(middleware.SecurityHeaders())
 
-	// CORS: allow localhost, known prod domains, all *.vercel.app previews,
+	// CORS: allow localhost, known prod domains, specific Vercel deployment,
 	// and any extra origin set via FRONTEND_URL env var.
 	extraOrigin := os.Getenv("FRONTEND_URL")
+	vercelProject := os.Getenv("VERCEL_PROJECT_SLUG") // e.g. "tradeiq"
 	r.Use(cors.New(cors.Config{
 		AllowOriginFunc: func(origin string) bool {
 			if origin == "http://localhost:3000" {
 				return true
 			}
-			if strings.HasSuffix(origin, ".vercel.app") {
+			if origin == "https://tradeiq.in" || origin == "https://www.tradeiq.in" {
 				return true
 			}
-			if origin == "https://tradeiq.in" || origin == "https://www.tradeiq.in" {
+			// Only allow the specific Vercel project, not all *.vercel.app
+			if vercelProject != "" && strings.HasSuffix(origin, ".vercel.app") &&
+				strings.Contains(origin, vercelProject) {
 				return true
 			}
 			if extraOrigin != "" && origin == extraOrigin {
@@ -81,7 +96,7 @@ func main() {
 
 	// ── AUTH ──────────────────────────────────────────────
 	authGroup := v1.Group("/auth")
-	authGroup.Use(middleware.RateLimit(20))
+	authGroup.Use(middleware.RateLimit(5))
 	{
 		authGroup.POST("/register", auth.Register)
 		authGroup.POST("/login", auth.Login)

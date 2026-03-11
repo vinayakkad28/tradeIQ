@@ -100,7 +100,7 @@ export default function DashboardOverview() {
       )}
 
       {/* KPI Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0.75rem' }}>
+      <div className="kpi-grid-7" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0.75rem' }}>
         {[
           { label: 'Net P&L', value: fmt(totalPnl), cls: pnlPos ? 'data-value-positive' : 'data-value-negative', tip: 'Sum of all closed trade P&L in the selected period.' },
           { label: 'Win Rate', value: `${winRate.toFixed(1)}%`, cls: winRate >= 55 ? 'data-value-positive' : 'data-value-amber', tip: '% of trades with positive P&L. Formula: Wins ÷ Total Trades × 100.' },
@@ -120,7 +120,7 @@ export default function DashboardOverview() {
       </div>
 
       {/* IQ Score + Equity Curve */}
-      <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: '0.75rem' }}>
+      <div className="kpi-grid-2" style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: '0.75rem' }}>
         {/* IQ Score */}
         <div className="terminal-card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div className="section-header">
@@ -181,7 +181,7 @@ export default function DashboardOverview() {
       </div>
 
       {/* Behavioral Flags + Weekly P&L */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+      <div className="kpi-grid-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
         {/* Behavioral Flags */}
         <div className="terminal-card">
           <div className="section-header"><span className="section-header-text">Behavioral Flags</span></div>
@@ -229,7 +229,7 @@ export default function DashboardOverview() {
       </div>
 
       {/* Win/Loss summary + Most Expensive Days */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+      <div className="kpi-grid-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
         <div className="terminal-card">
           <div className="section-header"><span className="section-header-text">Trade Summary</span></div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>

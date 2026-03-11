@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"tradeiq/gateway/models"
+	appcrypto "tradeiq/gateway/pkg/crypto"
 	"tradeiq/gateway/pkg/database"
 
 	"github.com/gin-gonic/gin"
@@ -191,7 +192,8 @@ func getUserDhanToken(userID uuid.UUID) string {
 	if conn.TokenExpiresAt != nil && conn.TokenExpiresAt.Before(time.Now()) {
 		return ""
 	}
-	return conn.AccessToken
+	decrypted, _ := appcrypto.Decrypt(conn.AccessToken)
+	return decrypted
 }
 
 // ── GET /api/v1/market/option-chain?symbol=NIFTY ─────────

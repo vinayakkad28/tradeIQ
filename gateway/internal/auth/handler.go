@@ -3,12 +3,13 @@ package auth
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"log"
 	"net/http"
-	"os"
 	"time"
 
 	"tradeiq/gateway/models"
 	"tradeiq/gateway/pkg/database"
+	"tradeiq/gateway/pkg/middleware"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -17,11 +18,7 @@ import (
 )
 
 func jwtSecret() []byte {
-	s := os.Getenv("JWT_SECRET")
-	if s == "" {
-		s = "tradeiq_dev_secret_change_in_production"
-	}
-	return []byte(s)
+	return []byte(middleware.MustGetJWTSecret())
 }
 
 func generateTokens(userID uuid.UUID) (accessToken, refreshToken string, err error) {
@@ -82,14 +79,18 @@ func Register(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": true, "code": "TOKEN_ERROR", "message": "Failed to generate tokens"})
 		return
 	}
-	database.DB.Create(&models.RefreshToken{
+	if err := database.DB.Create(&models.RefreshToken{
 		ID:        uuid.New(),
 		UserID:    user.ID,
 		TokenHash: hashToken(refreshToken),
 		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
-	})
+	}).Error; err != nil {
+		log.Printf("[Auth] Failed to store refresh token for user %s: %v", user.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": true, "code": "TOKEN_STORE_ERROR", "message": "Failed to store session"})
+		return
+	}
 	c.JSON(http.StatusCreated, gin.H{
-		"user": user,
+		"user":   user,
 		"tokens": gin.H{"access_token": accessToken, "refresh_token": refreshToken},
 	})
 }
@@ -118,14 +119,18 @@ func Login(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": true, "code": "TOKEN_ERROR", "message": "Failed to generate tokens"})
 		return
 	}
-	database.DB.Create(&models.RefreshToken{
+	if err := database.DB.Create(&models.RefreshToken{
 		ID:        uuid.New(),
 		UserID:    user.ID,
 		TokenHash: hashToken(refreshToken),
 		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
-	})
+	}).Error; err != nil {
+		log.Printf("[Auth] Failed to store refresh token for user %s: %v", user.ID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": true, "code": "TOKEN_STORE_ERROR", "message": "Failed to store session"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"user": user,
+		"user":   user,
 		"tokens": gin.H{"access_token": accessToken, "refresh_token": refreshToken},
 	})
 }
@@ -163,12 +168,16 @@ func Refresh(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": true, "code": "TOKEN_ERROR", "message": "Failed to generate tokens"})
 		return
 	}
-	database.DB.Create(&models.RefreshToken{
+	if err := database.DB.Create(&models.RefreshToken{
 		ID:        uuid.New(),
 		UserID:    userID,
 		TokenHash: hashToken(refreshToken),
 		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
-	})
+	}).Error; err != nil {
+		log.Printf("[Auth] Failed to store refresh token for user %s: %v", userID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": true, "code": "TOKEN_STORE_ERROR", "message": "Failed to store session"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"tokens": gin.H{"access_token": accessToken, "refresh_token": refreshToken}})
 }
 

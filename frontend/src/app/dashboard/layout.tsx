@@ -168,7 +168,7 @@ function ProfileDropdown({ onClose }: { onClose: () => void }) {
   )
 }
 
-function DashboardHeader() {
+function DashboardHeader({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const { range, setRange, insights, isLoading, hasRealData } = useDateRange()
   const { user } = useAuth()
   const pnlPos = insights.totalPnl >= 0
@@ -194,7 +194,8 @@ function DashboardHeader() {
 
   return (
     <header className="dashboard-header" style={{ justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <button className="mobile-menu-btn" onClick={onToggleSidebar} aria-label="Toggle navigation menu">☰</button>
         <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: '0.9rem', color: 'var(--color-amber-primary)', letterSpacing: '-0.01em' }}>
           TRADE<span style={{ color: 'var(--color-text-primary)' }}>IQ</span>
         </span>
@@ -268,7 +269,7 @@ function DashboardHeader() {
   )
 }
 
-function Sidebar() {
+function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const pathname = usePathname()
   const { insights, hasRealData } = useDateRange()
   const { user } = useAuth()
@@ -277,8 +278,13 @@ function Sidebar() {
   const planLabel = user?.plan ? user.plan.charAt(0).toUpperCase() + user.plan.slice(1) + ' Plan' : 'Demo Mode'
   const avatarBg = AVATAR_COLOR_MAP[user?.avatar_color ?? 'amber'] ?? '#f59e0b'
 
+  // Close sidebar on route change (mobile)
+  useEffect(() => {
+    onClose()
+  }, [pathname]) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
-    <aside className="sidebar" style={{ height: '100%', overflowY: 'auto', position: 'sticky', top: 48, alignSelf: 'flex-start', maxHeight: 'calc(100vh - 48px)' }}>
+    <aside className={`sidebar ${isOpen ? 'sidebar-open' : ''}`} style={{ height: '100%', overflowY: 'auto', position: 'sticky', top: 48, alignSelf: 'flex-start', maxHeight: 'calc(100vh - 48px)' }}>
       <div className="user-card">
         <div className="user-avatar" style={{ background: avatarBg, color: '#000' }}>{displayName.slice(0, 2).toUpperCase()}</div>
         <div>
@@ -356,11 +362,17 @@ function SessionGuard({ children }: { children: React.ReactNode }) {
 }
 
 function DashboardInner({ children }: { children: React.ReactNode }) {
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const toggleSidebar = () => setSidebarOpen(prev => !prev)
+  const closeSidebar = () => setSidebarOpen(false)
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--color-bg-primary)' }}>
-      <DashboardHeader />
+      <DashboardHeader onToggleSidebar={toggleSidebar} />
       <div style={{ display: 'flex', flex: 1 }}>
-        <Sidebar />
+        {/* Mobile overlay */}
+        <div className={`sidebar-overlay ${sidebarOpen ? 'sidebar-open' : ''}`} onClick={closeSidebar} />
+        <Sidebar isOpen={sidebarOpen} onClose={closeSidebar} />
         <main style={{ flex: 1, overflowX: 'hidden', minHeight: 'calc(100vh - 48px)' }}>
           {children}
         </main>

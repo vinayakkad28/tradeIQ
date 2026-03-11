@@ -23,6 +23,12 @@ func IngestCSV(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "NO_FILE", "message": "CSV file required"})
 		return
 	}
+	// Enforce 10 MB limit
+	const maxCSVSize = 10 << 20
+	if file.Size > maxCSVSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": true, "code": "FILE_TOO_LARGE", "message": "CSV file must be under 10 MB"})
+		return
+	}
 	f, _ := file.Open()
 	defer f.Close()
 	reader := csv.NewReader(f)
@@ -38,21 +44,37 @@ func IngestCSV(c *gin.Context) {
 	}
 
 	brokerDetected := detectBroker(headers)
-	accepted, rejected := 0, 0
+	rejected := 0
+	rejectedReasons := []string{}
+	var batch []*models.Trade
 
-	for _, row := range records[1:] {
+	for i, row := range records[1:] {
 		trade, err := parseRow(row, headers, userID, brokerDetected)
 		if err != nil {
 			rejected++
+			if len(rejectedReasons) < 10 {
+				rejectedReasons = append(rejectedReasons, fmt.Sprintf("row %d: %s", i+2, err.Error()))
+			}
 			continue
 		}
-		if err := database.DB.Create(trade).Error; err != nil {
-			rejected++
-			continue
-		}
-		accepted++
+		batch = append(batch, trade)
 	}
-	c.JSON(http.StatusOK, gin.H{"accepted": accepted, "rejected": rejected, "broker_detected": brokerDetected})
+
+	accepted := 0
+	if len(batch) > 0 {
+		// Batch insert in chunks of 100
+		if err := database.DB.CreateInBatches(batch, 100).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": true, "code": "DB_ERROR", "message": "Failed to save trades: " + err.Error()})
+			return
+		}
+		accepted = len(batch)
+	}
+
+	result := gin.H{"accepted": accepted, "rejected": rejected, "broker_detected": brokerDetected}
+	if len(rejectedReasons) > 0 {
+		result["rejected_reasons"] = rejectedReasons
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func detectBroker(headers map[string]int) string {
@@ -129,7 +151,7 @@ func parseRow(row []string, headers map[string]int, userID uuid.UUID, broker str
 		direction = "SELL"
 	}
 	if direction != "BUY" && direction != "SELL" {
-		direction = "BUY" // last resort
+		return nil, fmt.Errorf("unrecognized direction: %q", dirRaw)
 	}
 
 	// ── Segment ──

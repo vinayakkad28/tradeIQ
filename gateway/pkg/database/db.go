@@ -17,13 +17,18 @@ var DB *gorm.DB
 func Init() {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
+		sslmode := getEnv("DB_SSLMODE", "disable")
+		if os.Getenv("GIN_MODE") == "release" {
+			sslmode = getEnv("DB_SSLMODE", "require")
+		}
 		dsn = fmt.Sprintf(
-			"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+			"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 			getEnv("DB_HOST", "localhost"),
 			getEnv("DB_PORT", "5432"),
 			getEnv("DB_USER", "tradeiq"),
 			getEnv("DB_PASSWORD", "tradeiq_dev"),
 			getEnv("DB_NAME", "tradeiq"),
+			sslmode,
 		)
 	}
 

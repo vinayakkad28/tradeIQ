@@ -2,6 +2,7 @@ package ws
 
 import (
 	"net/http"
+	"os"
 
 	"tradeiq/gateway/models"
 
@@ -14,8 +15,18 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		// Allow all origins in dev; restrict in production via CORS
-		return true
+		origin := r.Header.Get("Origin")
+		if origin == "" || origin == "http://localhost:3000" {
+			return true
+		}
+		if origin == "https://tradeiq.in" || origin == "https://www.tradeiq.in" {
+			return true
+		}
+		// Allow configured frontend URL
+		if env := os.Getenv("FRONTEND_URL"); env != "" && origin == env {
+			return true
+		}
+		return false
 	},
 }
 

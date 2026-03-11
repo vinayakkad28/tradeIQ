@@ -18,7 +18,7 @@ export default function PerformancePage() {
 
       <div>
         <div className="section-header"><span className="section-header-text">Time Performance Analysis</span></div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>
+        <div className="kpi-grid-4" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>
           {[
             { label: 'Morning Edge (<10:00)', value: `₹${morningEdge.toLocaleString('en-IN')}`, pos: morningEdge >= 0 },
             { label: 'Afternoon Cost (>14:00)', value: `₹${Math.abs(afternoonCost).toLocaleString('en-IN')}`, pos: afternoonCost >= 0, suffix: afternoonCost < 0 ? ' cost' : ' gain' },

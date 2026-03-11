@@ -17,12 +17,36 @@ import (
 	"time"
 
 	"tradeiq/gateway/models"
+	appcrypto "tradeiq/gateway/pkg/crypto"
 	"tradeiq/gateway/pkg/database"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 )
+
+// encryptToken encrypts a broker token before storage.
+func encryptToken(token string) string {
+	encrypted, err := appcrypto.Encrypt(token)
+	if err != nil {
+		log.Printf("[Broker] Failed to encrypt token: %v — storing as-is", err)
+		return token
+	}
+	return encrypted
+}
+
+// decryptToken decrypts a broker token from storage. Handles legacy plaintext gracefully.
+func decryptToken(token string) string {
+	decrypted, err := appcrypto.Decrypt(token)
+	if err != nil {
+		return token
+	}
+	return decrypted
+}
+
+// brokerHTTP is a shared HTTP client with a reasonable timeout
+// to prevent hanging indefinitely on broker API calls.
+var brokerHTTP = &http.Client{Timeout: 30 * time.Second}
 
 // ─── SUPPORTED BROKERS ────────────────────────────────────
 
@@ -135,7 +159,7 @@ func ConnectBroker(c *gin.Context) {
 		conn.UserID = userID
 		conn.BrokerName = "dhan"
 		conn.DisplayName = brokerDisplayName("dhan")
-		conn.AccessToken = req.AccessToken
+		conn.AccessToken = encryptToken(req.AccessToken)
 		conn.ExternalUserID = req.ClientID
 		conn.Status = "connected"
 		conn.ConnectedAt = now
@@ -242,7 +266,7 @@ func generateDhanConsent(cfg brokerConfig) (string, error) {
 	req.Header.Set("app_secret", cfg.APISecret)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := brokerHTTP.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -275,7 +299,7 @@ func exchangeDhan(cfg brokerConfig, tokenID string) (string, string, *time.Time,
 	req.Header.Set("app_secret", cfg.APISecret)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := brokerHTTP.Do(req)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -499,7 +523,7 @@ func BrokerCallback(c *gin.Context) {
 	conn.UserID = userID
 	conn.BrokerName = req.BrokerName
 	conn.DisplayName = brokerDisplayName(req.BrokerName)
-	conn.AccessToken = accessToken
+	conn.AccessToken = encryptToken(accessToken)
 	conn.TokenExpiresAt = expiresAt
 	conn.Status = "connected"
 	conn.ConnectedAt = now
@@ -508,10 +532,10 @@ func BrokerCallback(c *gin.Context) {
 		conn.ExternalUserID = refreshToken
 		conn.RefreshToken = ""
 	} else {
-		conn.RefreshToken = refreshToken
+		conn.RefreshToken = encryptToken(refreshToken)
 	}
 	if req.FeedToken != "" {
-		conn.FeedToken = req.FeedToken
+		conn.FeedToken = encryptToken(req.FeedToken)
 	}
 
 	if conn.ID == uuid.Nil {
@@ -541,6 +565,9 @@ func SyncBroker(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": true, "code": "NOT_FOUND", "message": "Connection not found"})
 		return
 	}
+
+	// Decrypt tokens for use in API calls
+	decryptConnection(&conn)
 
 	// Check token expiry
 	if conn.AccessToken == "" || (conn.TokenExpiresAt != nil && conn.TokenExpiresAt.Before(time.Now())) {
@@ -597,6 +624,7 @@ func SyncAllBrokers(c *gin.Context) {
 	results := []gin.H{}
 	totalImported := 0
 	for _, conn := range conns {
+		decryptConnection(&conn)
 		cfg := getBrokerConfig(conn.BrokerName)
 		trades, err := fetchBrokerTrades(conn, cfg, userID)
 		if err != nil {
@@ -674,7 +702,7 @@ func exchangeZerodha(cfg brokerConfig, requestToken string) (string, string, *ti
 	req.Header.Set("X-Kite-Version", "3")
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := brokerHTTP.Do(req)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -751,7 +779,7 @@ func exchangeFyers(cfg brokerConfig, code string) (string, string, *time.Time, e
 	req, _ := http.NewRequest("POST", cfg.TokenURL, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := brokerHTTP.Do(req)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -802,7 +830,7 @@ func loginAngelOne(clientCode, password, totp, apiKey string) (jwtToken, feedTok
 	req.Header.Set("X-MACAddress", "00:00:00:00:00:00")
 	req.Header.Set("X-PrivateKey", apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := brokerHTTP.Do(req)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("angelone: http error: %w", err)
 	}
@@ -836,6 +864,14 @@ func loginAngelOne(clientCode, password, totp, apiKey string) (jwtToken, feedTok
 // ─────────────────────────────────────────────────────────
 // BROKER TRADE FETCHING
 // ─────────────────────────────────────────────────────────
+
+// decryptConnection decrypts all encrypted token fields on a BrokerConnection.
+// Call this after loading from DB and before using tokens in API calls.
+func decryptConnection(conn *models.BrokerConnection) {
+	conn.AccessToken = decryptToken(conn.AccessToken)
+	conn.RefreshToken = decryptToken(conn.RefreshToken)
+	conn.FeedToken = decryptToken(conn.FeedToken)
+}
 
 func fetchBrokerTrades(conn models.BrokerConnection, cfg brokerConfig, userID uuid.UUID) ([]models.Trade, error) {
 	switch conn.BrokerName {
@@ -894,7 +930,7 @@ func angelOneGet(url string, headers map[string]string) ([]angelOneRow, error) {
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := brokerHTTP.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -1064,7 +1100,7 @@ func fetchZerodhaTrades(conn models.BrokerConnection, cfg brokerConfig, userID u
 	req.Header.Set("X-Kite-Version", "3")
 	req.Header.Set("Authorization", "token "+cfg.APIKey+":"+conn.AccessToken)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := brokerHTTP.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -1139,7 +1175,7 @@ func fetchFyersTrades(conn models.BrokerConnection, cfg brokerConfig, userID uui
 	req.Header.Set("Authorization", appID+":"+conn.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := brokerHTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fyers: http error: %w", err)
 	}
@@ -1298,7 +1334,7 @@ func fetchUpstoxTrades(conn models.BrokerConnection, _ brokerConfig, userID uuid
 		req.Header.Set("Authorization", "Bearer "+conn.AccessToken)
 		req.Header.Set("Accept", "application/json")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := brokerHTTP.Do(req)
 		if err != nil {
 			break
 		}
@@ -1461,7 +1497,7 @@ func fetchDhanTrades(conn models.BrokerConnection, _ brokerConfig, userID uuid.U
 			req.Header.Set("Accept", "application/json")
 			req.Header.Set("Content-Type", "application/json")
 
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := brokerHTTP.Do(req)
 			if err != nil {
 				return nil, fmt.Errorf("dhan: http error: %w", err)
 			}

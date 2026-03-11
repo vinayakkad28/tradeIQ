@@ -40,7 +40,9 @@ services:
       DB_PASSWORD: tradeiq_dev
       DB_NAME: tradeiq
       REDIS_URL: redis://redis:6379
-      JWT_SECRET: ${JWT_SECRET:-change_this_in_production_please}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      VERCEL_PROJECT_SLUG: ${VERCEL_PROJECT_SLUG:-tradeiq}
       GIN_MODE: release
       PORT: 8080
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080}
