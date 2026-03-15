@@ -100,7 +100,7 @@ export default function DashboardOverview() {
       )}
 
       {/* KPI Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '0.75rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '0.75rem' }}>
         {[
           { label: 'Net P&L', value: fmt(totalPnl), cls: pnlPos ? 'data-value-positive' : 'data-value-negative', tip: 'Sum of all closed trade P&L in the selected period.' },
           { label: 'Win Rate', value: `${winRate.toFixed(1)}%`, cls: winRate >= 55 ? 'data-value-positive' : 'data-value-amber', tip: '% of trades with positive P&L. Formula: Wins ÷ Total Trades × 100.' },
@@ -120,7 +120,7 @@ export default function DashboardOverview() {
       </div>
 
       {/* IQ Score + Equity Curve */}
-      <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: '0.75rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 240px) minmax(0, 1fr)', gap: '0.75rem', flexWrap: 'wrap' }}>
         {/* IQ Score */}
         <div className="terminal-card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <div className="section-header">

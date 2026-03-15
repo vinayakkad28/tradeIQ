@@ -1,8 +1,10 @@
 'use client'
 import { useDateRange } from '@/context/DateRangeContext'
+import { useAuth } from '@/context/AuthContext'
 
 export default function ReportPage() {
   const { insights } = useDateRange()
+  const { user } = useAuth()
   const {
     totalPnl, winRate, totalTrades, wins, losses, expectancy, profitFactor,
     maxDrawdown, allInsights, planComplianceRate, revengeTradeCount,
@@ -20,14 +22,14 @@ export default function ReportPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <div className="section-header-text" style={{ fontFamily: 'var(--font-mono)' }}>WEEKLY TRADING PERFORMANCE REPORT</div>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>Generated: {date} · Vinayak K. · Trader Plan</div>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>Generated: {date} · {user?.full_name ?? 'Trader'} · {user?.plan ? user.plan.charAt(0).toUpperCase() + user.plan.slice(1) : 'Free'} Plan</div>
         </div>
         <button className="btn-primary no-print" onClick={() => window.print()}>↓ Print / Export PDF</button>
       </div>
 
       {/* Header Summary */}
       <div className="terminal-card-amber print-report">
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '1rem' }}>
           {[
             { label: 'Net P&L', value: `${pnlPos ? '+' : ''}₹${totalPnl.toLocaleString('en-IN')}`, cls: pnlPos ? 'data-value-positive' : 'data-value-negative' },
             { label: 'Win Rate', value: `${winRate.toFixed(1)}%`, cls: 'data-value-amber' },
@@ -71,7 +73,7 @@ export default function ReportPage() {
       {/* Behavioral Scorecard */}
       <div>
         <div className="section-header"><span className="section-header-text">Behavioral Scorecard</span></div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '0.75rem' }}>
           {[
             {
               label: 'Plan Compliance',

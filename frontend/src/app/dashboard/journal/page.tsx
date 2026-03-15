@@ -89,6 +89,7 @@ export default function JournalPage() {
   const { isAuthenticated } = useAuth()
   const [filter, setFilter] = useState<'all' | 'wins' | 'losses' | 'revenge' | 'offplan'>('all')
   const [emotionFilter, setEmotionFilter] = useState<string>('all')
+  const [exporting, setExporting] = useState(false)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [apiTrades, setApiTrades] = useState<any[]>([])
   const [loadingTrades, setLoadingTrades] = useState(false)
@@ -113,6 +114,32 @@ export default function JournalPage() {
       .catch(() => setApiTrades([]))
       .finally(() => setLoadingTrades(false))
   }, [isAuthenticated, hasRealData, range])
+
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      const now = new Date()
+      const cutoffs: Record<string, Date | null> = {
+        '7d':  new Date(now.getTime() - 7 * 86400_000),
+        '1m':  new Date(new Date().setMonth(now.getMonth() - 1)),
+        '3m':  new Date(new Date().setMonth(now.getMonth() - 3)),
+        '6m':  new Date(new Date().setMonth(now.getMonth() - 6)),
+        'all': null,
+      }
+      const cutoff = cutoffs[range] ?? null
+      const res = await tradesAPI.export(cutoff ? { start_date: cutoff.toISOString().slice(0, 10) } : undefined)
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `trades-${range}-${new Date().toISOString().slice(0, 10)}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      // silently fail
+    } finally {
+      setExporting(false)
+    }
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sourceTrades: any[] = hasRealData && apiTrades.length > 0 ? apiTrades : []
@@ -163,6 +190,16 @@ export default function JournalPage() {
             {e === 'all' ? 'All' : `${EMOTION_EMOJI[e]} ${e}`}
           </button>
         ))}
+        {hasRealData && (
+          <button
+            className="btn-ghost"
+            style={{ marginLeft: 'auto', fontSize: '0.75rem' }}
+            onClick={handleExport}
+            disabled={exporting}
+          >
+            {exporting ? 'Exporting...' : '↓ Export CSV'}
+          </button>
+        )}
       </div>
 
       {/* Trade Table */}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"tradeiq/gateway/internal/alerts"
 	"tradeiq/gateway/models"
 	"tradeiq/gateway/pkg/database"
 
@@ -52,6 +53,16 @@ func IngestCSV(c *gin.Context) {
 		}
 		accepted++
 	}
+	// Invalidate analytics cache so fresh data is served on next request
+	database.DB.Where("user_id = ?", userID).Delete(&models.AnalyticsCache{})
+
+	// Run alert checks in background
+	go func() {
+		var recentTrades []models.Trade
+		database.DB.Where("user_id = ?", userID).Order("created_at DESC").Limit(500).Find(&recentTrades)
+		alerts.EvaluateAndNotify(userID, recentTrades)
+	}()
+
 	c.JSON(http.StatusOK, gin.H{"accepted": accepted, "rejected": rejected, "broker_detected": brokerDetected})
 }
 
@@ -240,6 +251,7 @@ func parseRow(row []string, headers map[string]int, userID uuid.UUID, broker str
 		ExitPrice:        exitPricePtr,
 		Quantity:         qty,
 		PnL:              &pnl,
+		NetPnL:           func() *float64 { v := pnl - charges; return &v }(),
 		Charges:          charges,
 		HoldingMinutes:   holdingMinsPtr,
 		Status:           status,
@@ -328,4 +340,77 @@ func GetTrade(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, trade)
+}
+
+// GET /trades/export/csv
+func ExportCSV(c *gin.Context) {
+	userID := c.MustGet("user_id").(uuid.UUID)
+
+	query := database.DB.Where("user_id = ?", userID)
+	if start := c.Query("start_date"); start != "" {
+		query = query.Where("trade_date >= ?", start)
+	}
+	if end := c.Query("end_date"); end != "" {
+		query = query.Where("trade_date <= ?", end)
+	}
+	if seg := c.Query("segment"); seg != "" {
+		query = query.Where("segment = ?", seg)
+	}
+
+	var trades []models.Trade
+	query.Order("trade_date DESC, entry_time DESC").Find(&trades)
+
+	c.Header("Content-Disposition", "attachment; filename=\"trades.csv\"")
+	c.Header("Content-Type", "text/csv")
+
+	w := csv.NewWriter(c.Writer)
+	defer w.Flush()
+
+	// Write header
+	w.Write([]string{
+		"date", "instrument", "segment", "direction",
+		"entry_price", "exit_price", "quantity",
+		"pnl", "net_pnl", "charges",
+		"emotion", "setup_rating",
+		"followed_plan", "stop_loss_moved", "re_entry_after_loss",
+		"status", "source",
+	})
+
+	for _, t := range trades {
+		exitPrice := ""
+		if t.ExitPrice != nil {
+			exitPrice = strconv.FormatFloat(*t.ExitPrice, 'f', 4, 64)
+		}
+		pnl := ""
+		if t.PnL != nil {
+			pnl = strconv.FormatFloat(*t.PnL, 'f', 2, 64)
+		}
+		netPnl := ""
+		if t.NetPnL != nil {
+			netPnl = strconv.FormatFloat(*t.NetPnL, 'f', 2, 64)
+		}
+		followedPlan := ""
+		if t.FollowedPlan != nil {
+			followedPlan = strconv.FormatBool(*t.FollowedPlan)
+		}
+		w.Write([]string{
+			t.TradeDate.Format("2006-01-02"),
+			t.Instrument,
+			t.Segment,
+			t.Direction,
+			strconv.FormatFloat(t.EntryPrice, 'f', 4, 64),
+			exitPrice,
+			strconv.Itoa(t.Quantity),
+			pnl,
+			netPnl,
+			strconv.FormatFloat(t.Charges, 'f', 2, 64),
+			t.Emotion,
+			t.SetupRating,
+			followedPlan,
+			strconv.FormatBool(t.StopLossMoved),
+			strconv.FormatBool(t.ReEntryAfterLoss),
+			t.Status,
+			t.Source,
+		})
+	}
 }

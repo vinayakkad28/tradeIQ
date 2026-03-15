@@ -51,7 +51,7 @@ func GetInsights(c *gin.Context) {
 		return
 	}
 
-	insights := computeFullInsights(trades)
+	insights := ComputeFullInsights(trades)
 	payload, _ := json.Marshal(insights)
 
 	// Cache by plan
@@ -359,7 +359,7 @@ type FullInsightReport struct {
 	WeeklyTrend       []WeeklyPoint  `json:"weeklyTrend"`
 }
 
-func computeFullInsights(trades []models.Trade) FullInsightReport {
+func ComputeFullInsights(trades []models.Trade) FullInsightReport {
 	if len(trades) == 0 {
 		return FullInsightReport{HasData: false}
 	}

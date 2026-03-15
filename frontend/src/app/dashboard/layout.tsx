@@ -168,7 +168,7 @@ function ProfileDropdown({ onClose }: { onClose: () => void }) {
   )
 }
 
-function DashboardHeader() {
+function DashboardHeader({ onMenuClick }: { onMenuClick: () => void }) {
   const { range, setRange, insights, isLoading, hasRealData } = useDateRange()
   const { user } = useAuth()
   const pnlPos = insights.totalPnl >= 0
@@ -194,7 +194,18 @@ function DashboardHeader() {
 
   return (
     <header className="dashboard-header" style={{ justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 50 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        {/* Hamburger — visible only on mobile via CSS */}
+        <button
+          onClick={onMenuClick}
+          className="menu-toggle"
+          aria-label="Toggle navigation"
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer', padding: '0.25rem',
+            color: 'var(--color-text-secondary)', fontSize: '1.1rem', lineHeight: 1,
+            display: 'none',
+          }}
+        >☰</button>
         <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: '0.9rem', color: 'var(--color-amber-primary)', letterSpacing: '-0.01em' }}>
           TRADE<span style={{ color: 'var(--color-text-primary)' }}>IQ</span>
         </span>
@@ -356,12 +367,31 @@ function SessionGuard({ children }: { children: React.ReactNode }) {
 }
 
 function DashboardInner({ children }: { children: React.ReactNode }) {
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const pathname = usePathname()
+
+  // Close sidebar on navigation
+  useEffect(() => { setSidebarOpen(false) }, [pathname])
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--color-bg-primary)' }}>
-      <DashboardHeader />
-      <div style={{ display: 'flex', flex: 1 }}>
-        <Sidebar />
-        <main style={{ flex: 1, overflowX: 'hidden', minHeight: 'calc(100vh - 48px)' }}>
+      <DashboardHeader onMenuClick={() => setSidebarOpen(o => !o)} />
+      <div style={{ display: 'flex', flex: 1, position: 'relative' }}>
+        {/* Mobile overlay */}
+        {sidebarOpen && (
+          <div
+            onClick={() => setSidebarOpen(false)}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+              zIndex: 99, display: 'none',
+            }}
+            className="sidebar-overlay"
+          />
+        )}
+        <div className={`sidebar-wrapper${sidebarOpen ? ' sidebar-open' : ''}`}>
+          <Sidebar />
+        </div>
+        <main style={{ flex: 1, overflowX: 'hidden', minWidth: 0, minHeight: 'calc(100vh - 48px)' }}>
           {children}
         </main>
       </div>

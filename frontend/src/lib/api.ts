@@ -106,6 +106,8 @@ export const tradesAPI = {
     limit?: number
   }) => api.get('/trades', { params }),
   get: (id: string) => api.get(`/trades/${id}`),
+  export: (params?: { start_date?: string; end_date?: string; segment?: string }) =>
+    api.get('/trades/export/csv', { params, responseType: 'blob' }),
 }
 
 // ── ANALYTICS ───────────────────────────────────────────

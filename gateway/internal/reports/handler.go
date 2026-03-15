@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"tradeiq/gateway/internal/analytics"
 	"tradeiq/gateway/models"
 	"tradeiq/gateway/pkg/database"
 
@@ -68,6 +69,12 @@ func GenerateReport(c *gin.Context) {
 		winRate = float64(wins) / float64(len(trades)) * 100
 	}
 
+	topInsight := "No trades this week."
+	if len(trades) > 0 {
+		insights := analytics.ComputeFullInsights(trades)
+		topInsight = insights.PrimaryInsight.Title + ": " + insights.PrimaryInsight.Description + " Action: " + insights.PrimaryInsight.ActionText
+	}
+
 	report := models.WeeklyReport{
 		ID:         uuid.New(),
 		UserID:     userID,
@@ -76,7 +83,7 @@ func GenerateReport(c *gin.Context) {
 		TotalPnL:   totalPnL,
 		TradeCount: len(trades),
 		WinRate:    winRate,
-		TopInsight: "Review your behavioral patterns for this week.",
+		TopInsight: topInsight,
 	}
 	database.DB.Create(&report)
 	c.JSON(http.StatusCreated, report)

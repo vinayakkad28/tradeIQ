@@ -18,7 +18,7 @@ export default function PerformancePage() {
 
       <div>
         <div className="section-header"><span className="section-header-text">Time Performance Analysis</span></div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '0.75rem', marginBottom: '1rem' }}>
           {[
             { label: 'Morning Edge (<10:00)', value: `₹${morningEdge.toLocaleString('en-IN')}`, pos: morningEdge >= 0 },
             { label: 'Afternoon Cost (>14:00)', value: `₹${Math.abs(afternoonCost).toLocaleString('en-IN')}`, pos: afternoonCost >= 0, suffix: afternoonCost < 0 ? ' cost' : ' gain' },
@@ -135,7 +135,7 @@ export default function PerformancePage() {
       {/* Holding Duration */}
       <div className="terminal-card">
         <div className="section-header"><span className="section-header-text">Holding Duration Analysis</span></div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '0.75rem' }}>
           {holdingBuckets.map(b => (
             <div key={b.label} className={`kpi-card ${b.isEdgeZone ? 'positive' : ''}`} style={{ border: b.isEdgeZone ? '1px solid var(--color-positive)' : undefined }}>
               {b.isEdgeZone && <span className="badge badge-green" style={{ marginBottom: '0.25rem' }}>EDGE ZONE</span>}

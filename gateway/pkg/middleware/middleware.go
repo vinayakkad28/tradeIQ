@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"tradeiq/gateway/models"
@@ -93,13 +94,18 @@ func PlanGate(requiredPlan string) gin.HandlerFunc {
 
 // ── RATE LIMIT (simple token bucket) ────────────────────
 
-var rateLimitMap = map[string][]time.Time{}
+var (
+	rateLimitMu  sync.Mutex
+	rateLimitMap = map[string][]time.Time{}
+)
 
 func RateLimit(maxPerMinute int) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
 		now := time.Now()
 		cutoff := now.Add(-time.Minute)
+
+		rateLimitMu.Lock()
 		times := rateLimitMap[ip]
 		var valid []time.Time
 		for _, t := range times {
@@ -108,11 +114,13 @@ func RateLimit(maxPerMinute int) gin.HandlerFunc {
 			}
 		}
 		if len(valid) >= maxPerMinute {
+			rateLimitMu.Unlock()
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": true, "code": "RATE_LIMIT", "message": "Too many requests"})
 			c.Abort()
 			return
 		}
 		rateLimitMap[ip] = append(valid, now)
+		rateLimitMu.Unlock()
 		c.Next()
 	}
 }

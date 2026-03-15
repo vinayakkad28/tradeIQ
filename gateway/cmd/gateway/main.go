@@ -32,6 +32,7 @@ func main() {
 	}
 	r := gin.New()
 	r.Use(gin.Recovery())
+	r.Use(middleware.Logger())
 
 	// CORS: allow localhost, known prod domains, all *.vercel.app previews,
 	// and any extra origin set via FRONTEND_URL env var.
@@ -110,6 +111,7 @@ func main() {
 		protected.POST("trades/ingest/csv", trades.IngestCSV)
 		protected.GET("trades", trades.ListTrades)
 		protected.GET("trades/:id", trades.GetTrade)
+		protected.GET("trades/export/csv", trades.ExportCSV)
 
 		// Analytics
 		protected.GET("analytics/insights", analytics.GetInsights)

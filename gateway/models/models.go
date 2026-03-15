@@ -43,10 +43,10 @@ type BrokerConnection struct {
 
 type Trade struct {
 	ID                 uuid.UUID      `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	UserID             uuid.UUID      `gorm:"index;not null" json:"user_id"`
+	UserID             uuid.UUID      `gorm:"index:idx_trade_user_date,priority:1;index:idx_trade_user_status,priority:1;not null" json:"user_id"`
 	BrokerConnectionID *uuid.UUID     `json:"broker_connection_id,omitempty"`
 	BrokerTradeID      string         `json:"broker_trade_id,omitempty"`
-	TradeDate          time.Time      `gorm:"index;not null" json:"trade_date"`
+	TradeDate          time.Time      `gorm:"index:idx_trade_user_date,priority:2;not null" json:"trade_date"`
 	EntryTime          time.Time      `gorm:"not null" json:"entry_time"`
 	ExitTime           *time.Time     `json:"exit_time,omitempty"`
 	Instrument         string         `gorm:"not null" json:"instrument"`
@@ -59,7 +59,7 @@ type Trade struct {
 	PnL                *float64       `gorm:"type:decimal(12,2)" json:"pnl,omitempty"`
 	Charges            float64        `gorm:"type:decimal(10,2);default:0" json:"charges"`
 	NetPnL             *float64       `gorm:"type:decimal(12,2)" json:"net_pnl,omitempty"`
-	Status             string         `gorm:"default:closed" json:"status"`
+	Status             string         `gorm:"default:closed;index:idx_trade_user_status,priority:2" json:"status"`
 	HoldingMinutes     *int           `json:"holding_minutes,omitempty"`
 	FollowedPlan       *bool          `json:"followed_plan,omitempty"`
 	Emotion            string         `json:"emotion,omitempty"`
@@ -73,9 +73,9 @@ type Trade struct {
 
 type JournalEntry struct {
 	ID               uuid.UUID      `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	UserID           uuid.UUID      `gorm:"index;not null" json:"user_id"`
+	UserID           uuid.UUID      `gorm:"index:idx_journal_user_date,priority:1;not null" json:"user_id"`
 	TradeID          *uuid.UUID     `json:"trade_id,omitempty"`
-	TradeDate        time.Time      `json:"trade_date"`
+	TradeDate        time.Time      `gorm:"index:idx_journal_user_date,priority:2" json:"trade_date"`
 	Instrument       string         `json:"instrument"`
 	Direction        string         `json:"direction"`
 	PnL              *float64       `gorm:"type:decimal(12,2)" json:"pnl,omitempty"`

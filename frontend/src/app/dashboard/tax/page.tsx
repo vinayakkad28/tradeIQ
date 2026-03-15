@@ -145,7 +145,7 @@ export default function TaxPage() {
       {/* Inputs */}
       <div className="terminal-card">
         <div className="section-header"><span className="section-header-text">Income Details</span></div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '1rem' }}>
           {[
             { label: 'Financial Year', type: 'select', options: ['2024-25', '2025-26'], value: fy, onChange: setFy },
           ].map(f => (
@@ -175,7 +175,7 @@ export default function TaxPage() {
 
         <div style={{ marginTop: '1rem' }}>
           <div className="data-label-amber" style={{ marginBottom: '0.5rem' }}>Trading Income (from your trades)</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.75rem' }}>
             <InputField label="Intraday Equity P&L (₹)" value={intradayPnL} onChange={setIntradayPnL} tooltip="Speculative Business Income — taxed at slab rate. Can only offset against other speculative gains." />
             <InputField label="STCG — Short-Term Equity P&L (₹)" value={stcgPnL} onChange={setStcgPnL} tooltip="Equity held <12 months. Flat 20% tax (Finance Act 2024, was 15% pre-Jul 2024)." />
             <InputField label="LTCG — Long-Term Equity P&L (₹)" value={ltcgPnL} onChange={setLtcgPnL} tooltip="Equity held >12 months. First ₹1.25L exempt per year. 12.5% on gains above that." />
@@ -189,7 +189,7 @@ export default function TaxPage() {
       {/* Results */}
       {breakdowns.length > 0 && (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.75rem' }}>
             {[
               { label: 'Total Tax (before cess)', value: `₹${totalTax.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, cls: 'data-value-negative', tip: 'Sum of tax across all income categories, before adding surcharge and cess.' },
               { label: 'Surcharge + 4% Cess', value: `₹${(totalSurcharge + cess).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, cls: 'data-value-amber', tip: 'Health & Education Cess: 4% on total tax. Surcharge applies if income >₹50L (7%), >₹1Cr (12%), >₹2Cr (15%).' },
@@ -209,7 +209,7 @@ export default function TaxPage() {
             <div key={bd.category} className="terminal-card">
               <div className="section-header"><span className="section-header-text">{bd.label}</span></div>
               <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: 'var(--color-text-muted)', marginBottom: '0.75rem' }}>{bd.description}</p>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: '0.75rem' }}>
                 {[
                   { label: 'Gross P&L', value: `${bd.grossPnL >= 0 ? '+' : ''}₹${bd.grossPnL.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, cls: bd.grossPnL >= 0 ? 'data-value-positive' : 'data-value-negative' },
                   { label: 'Deductible Expenses', value: `₹${bd.expenses.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`, cls: '' },
